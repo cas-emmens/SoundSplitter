@@ -1,0 +1,33 @@
+# Secrets & local data (never commit)
+.env
+backend/data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Audio working dirs
+backend/uploads/
+backend/outputs/
+backend/smoke_out/
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# Node / Angular
+node_modules/
+frontend/dist/
+frontend/.angular/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Model cache (torch downloads weights here by default if redirected)
+.cache/

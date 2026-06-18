@@ -1,0 +1,67 @@
+@if (loading()) {
+  <p class="muted">Loading…</p>
+} @else if (song(); as s) {
+  <a routerLink="/library" class="back">← Library</a>
+
+  <header class="head">
+    <div class="art" [style.background-image]="s.art_url ? 'url(' + s.art_url + ')' : ''"></div>
+    <div>
+      <h1>{{ s.title }}</h1>
+      <div class="muted">{{ s.artist }}</div>
+    </div>
+  </header>
+
+  @if (!ready()) {
+    <p class="muted">Decoding stems…</p>
+  } @else {
+    <!-- transport -->
+    <section class="transport">
+      <button class="play primary" (click)="togglePlay()">{{ playing() ? '⏸ Pause' : '▶ Play' }}</button>
+      <span class="time">{{ fmt(pos()) }}</span>
+      <input class="seek" type="range" min="0" [max]="duration()" step="0.01"
+             [value]="pos()" (input)="seek($event)" />
+      <span class="time">{{ fmt(duration()) }}</span>
+      <button class="ghost practice" (click)="practiceMode()" title="Mute vocals + guitar">
+        🎸 Practice mode
+      </button>
+    </section>
+
+    <!-- stems -->
+    <section class="stems">
+      @for (vm of stems(); track vm.id) {
+        <div class="stem" [class.user]="vm.kind === 'user'" [class.muted]="vm.muted && !vm.solo">
+          <div class="name">
+            {{ vm.kind === 'model' ? pretty(vm.name) : vm.name }}
+            @if (vm.kind === 'user') { <span class="tag">my take</span> }
+          </div>
+          <button class="mini" [class.on]="vm.muted" (click)="toggleMute(vm)">Mute</button>
+          <button class="mini" [class.on-solo]="vm.solo" (click)="toggleSolo(vm)">Solo</button>
+          <input class="vol" type="range" min="0" max="1" step="0.01"
+                 [value]="vm.volume" (input)="setVolume(vm, $event)" />
+          @if (vm.kind === 'user') {
+            <label class="offset">offset
+              <input type="number" step="10" [value]="vm.offsetMs" (change)="updateOffset(vm, $event)" /> ms
+            </label>
+            <button class="mini del" (click)="deleteStem(vm)">✕</button>
+          }
+        </div>
+      }
+    </section>
+
+    <!-- import a take -->
+    <section class="import">
+      <h2>Add your own take</h2>
+      <div class="import-row">
+        <input type="file" accept="audio/*" (change)="onFile($event)" />
+        <input type="text" placeholder="Name" [value]="importName()" (input)="importName.set($any($event.target).value)" />
+        <label>offset <input type="number" step="10" [value]="importOffset()" (input)="importOffset.set(+$any($event.target).value)" /> ms</label>
+        <button class="primary" [disabled]="!importFile || importing()" (click)="doImport()">
+          {{ importing() ? 'Uploading…' : 'Add stem' }}
+        </button>
+      </div>
+      <p class="muted small">Record yourself playing along (in any app), then drop the file here. Use offset to nudge it into sync.</p>
+    </section>
+  }
+} @else {
+  <p class="muted">Song not found. <a routerLink="/library">Back to library</a></p>
+}

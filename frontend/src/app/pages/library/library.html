@@ -1,0 +1,39 @@
+<h1>Library</h1>
+
+@if (loading()) {
+  <p class="muted">Loading…</p>
+} @else if (songs().length === 0) {
+  <div class="empty">
+    <p>No songs yet.</p>
+    <p class="muted">Head to <a routerLink="/capture">Capture</a>, start recording, and play music on Spotify.</p>
+  </div>
+} @else {
+  <div class="grid">
+    @for (s of songs(); track s.track_id) {
+      <div class="card" [class.ready]="s.status === 'done'">
+        <div class="art">
+          @if (s.art_url) {
+            <img [src]="s.art_url" [alt]="s.title + ' album art'" loading="lazy" />
+          } @else {
+            <span class="art-placeholder">♪</span>
+          }
+        </div>
+        <div class="meta">
+          <div class="title" [title]="s.title">{{ s.title }}</div>
+          <div class="artist muted" [title]="s.artist">{{ s.artist }}</div>
+          <div class="row">
+            <span class="badge" [attr.data-status]="s.status">{{ statusLabel(s) }}</span>
+            <span class="actions">
+              @if (s.status === 'done') {
+                <a class="open" [routerLink]="['/player', s.track_id]">Open →</a>
+              }
+              <button class="del" [disabled]="deleting() === s.track_id"
+                      title="Delete song" (click)="remove(s, $event)">🗑</button>
+            </span>
+          </div>
+          @if (s.status === 'error') { <div class="err">{{ s.error }}</div> }
+        </div>
+      </div>
+    }
+  </div>
+}

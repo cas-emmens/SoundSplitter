@@ -1,0 +1,22 @@
+# NOTE: install CUDA PyTorch first, separately, from the PyTorch index:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+# Then: pip install -r requirements.txt
+
+# Web API
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Audio capture / IO
+sounddevice
+soundfile
+numpy
+
+# Source separation (htdemucs_6s) — relies on torch already being installed
+demucs
+
+# Spotify metadata + OAuth
+spotipy
+
+# Spectrogram rendering (stretch)
+matplotlib

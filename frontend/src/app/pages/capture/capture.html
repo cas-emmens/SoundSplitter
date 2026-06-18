@@ -1,0 +1,91 @@
+<h1>Capture</h1>
+
+@if (status(); as st) {
+  <!-- Spotify connection -->
+  <section class="panel">
+    <h2>1 · Spotify</h2>
+    @if (!st.spotify_configured) {
+      <p class="warn">Spotify credentials not set. Add them to <code>backend/.env</code> and restart the backend.</p>
+    } @else if (!st.spotify_authenticated) {
+      <p class="muted">Connect your Spotify account so the app can search and control playback.</p>
+      <button class="primary" (click)="connectSpotify()">Connect Spotify</button>
+    } @else {
+      <p class="ok">✓ Spotify connected</p>
+    }
+  </section>
+
+  @if (st.spotify_authenticated) {
+    @if (recording()) {
+      <!-- Recording lock: block interaction until the song finishes -->
+      <section class="panel lock">
+        <div class="lock-head"><span class="rec-dot"></span><h2>Recording in progress</h2></div>
+        @if (nowPlaying(); as np) {
+          <div class="np-row">
+            <div class="art"
+                 [style.background-image]="(np.art_url || st.requested_meta?.art_url) ? 'url(' + (np.art_url || st.requested_meta?.art_url) + ')' : ''"></div>
+            <div class="np-meta">
+              <div class="np-title">{{ np.title || st.requested_meta?.title || 'Starting…' }}</div>
+              <div class="muted">{{ np.artist || st.requested_meta?.artist }}</div>
+              <div class="bar"><div class="fill" [style.width.%]="progressPct()"></div></div>
+            </div>
+          </div>
+        } @else {
+          <p class="muted">Starting playback…</p>
+        }
+        <p class="warn lock-warn">⚠ Don't touch Spotify until this finishes — skipping or seeking will ruin the recording.</p>
+        <button class="danger-btn" [disabled]="busy()" (click)="stopRecording()">Cancel recording</button>
+      </section>
+    } @else {
+      <!-- Search + record -->
+      <section class="panel">
+        <h2>2 · Find a song to record</h2>
+        @if (st.error) { <p class="warn">{{ st.error }}</p> }
+        <div class="search">
+          <input type="text" placeholder="Search Spotify for a song…"
+                 [ngModel]="query()" (ngModelChange)="query.set($event)" (keyup.enter)="search()" />
+          <button class="primary" [disabled]="searching()" (click)="search()">
+            {{ searching() ? 'Searching…' : 'Search' }}
+          </button>
+        </div>
+        @if (recordError()) { <p class="warn">{{ recordError() }}</p> }
+
+        @if (results().length) {
+          <ul class="results">
+            @for (r of results(); track r.track_id) {
+              <li>
+                <div class="art sm" [style.background-image]="r.art_url ? 'url(' + r.art_url + ')' : ''"></div>
+                <div class="r-meta">
+                  <div class="r-title" [title]="r.title">{{ r.title }}</div>
+                  <div class="muted" [title]="r.artist">{{ r.artist }} · {{ fmtDur(r.duration_ms) }}</div>
+                </div>
+                <button class="primary" [disabled]="busy()" (click)="record(r)">Record →</button>
+              </li>
+            }
+          </ul>
+        }
+        <p class="muted hint">
+          Picking a song plays it from the start through
+          <strong>{{ st.device || 'your capture device' }}</strong> and records it automatically.
+        </p>
+      </section>
+    }
+
+    <!-- Rejected captures: prompt the user to re-record -->
+    @for (f of st.failed_captures; track f.id) {
+      <section class="panel failed">
+        <div class="failed-body">
+          <strong>Capture discarded: {{ f.title }}</strong>
+          <span class="muted">{{ f.artist }}</span>
+          <p class="warn">{{ f.reason }} (got {{ f.captured_s }}s, expected {{ f.expected_s }}s).</p>
+          <p class="muted">Search the song and hit Record again — it'll play from the start and re-record cleanly.</p>
+        </div>
+        <button class="ghost" (click)="dismissFailed(f.id)">Dismiss</button>
+      </section>
+    }
+
+    <section class="panel">
+      <h2>Separation queue</h2>
+      <p class="muted">{{ queueCount() }} song(s) waiting / in progress.</p>
+    </section>
+  }
+}
