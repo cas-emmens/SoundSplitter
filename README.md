@@ -28,6 +28,55 @@ browser playback mixer.
 
 ---
 
+## Set up on a new PC (e.g. for a friend)
+
+Each person runs their own copy — recording captures *your* Spotify on *your* machine,
+so there's nothing to host or share. On a fresh **Windows** PC:
+
+**What you need first (one-time):**
+1. **Python 3.13** — https://www.python.org/downloads/ (tick *“Add Python to PATH”*).
+2. **Node.js (LTS)** — https://nodejs.org/.
+3. **VB-CABLE** — https://vb-audio.com/Cable/ → install as admin, **reboot**. Then set
+   Spotify’s output device to **CABLE Input** (Windows → Settings → System → Sound →
+   Volume mixer → Spotify). The app records from **CABLE Output**.
+4. **Spotify Premium** (required — the app starts/stops playback for you) and a free
+   **Spotify Developer app**:
+   - https://developer.spotify.com/dashboard → *Create app*.
+   - Add Redirect URI **exactly**: `http://127.0.0.1:8000/api/spotify/callback`
+   - Copy the **Client ID** and **Client Secret** for the next step.
+5. *(Optional)* **ffmpeg** (https://www.gyan.dev/ffmpeg/builds/) — only needed to import
+   your own recorded takes as extra stems.
+
+**Then, in the project folder (PowerShell):**
+```powershell
+.\setup.ps1
+```
+This creates the Python environment and installs everything. It **auto-detects your
+GPU**: with an NVIDIA card, separation takes seconds–a minute per song; without one it
+falls back to CPU and takes a few minutes per song (still works).
+
+Open `backend\.env` and paste your Spotify Client ID/Secret:
+```
+SPOTIPY_CLIENT_ID=your_id
+SPOTIPY_CLIENT_SECRET=your_secret
+SPOTIPY_REDIRECT_URI=http://127.0.0.1:8000/api/spotify/callback
+```
+
+**Start it (any time after):**
+```powershell
+.\run.ps1
+```
+This launches the backend + frontend and opens http://localhost:4200. On the **Capture**
+tab, click **Connect Spotify** once, then search a song and hit **Record**.
+
+> **First separation downloads the Demucs model (~1 GB), once.** The first song will sit
+> in “Separating…” longer than usual while that downloads — it's not stuck.
+
+> If PowerShell blocks the scripts with an execution-policy error, run once:
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+
+---
+
 ## One-time setup
 
 ### 1. VB-CABLE (audio capture)
