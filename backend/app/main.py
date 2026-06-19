@@ -244,7 +244,12 @@ def serve_frontend(full_path: str):
     index = root / "index.html"
     if not index.exists():
         raise HTTPException(404, "frontend not built (run: npm run build)")
+    # index.html must never be cached, or the webview keeps loading an old build
+    # (it points at hashed chunks); the hashed assets themselves stay cacheable.
+    no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
     candidate = (root / full_path).resolve()
     if full_path and candidate.is_file() and root.resolve() in candidate.parents:
+        if candidate.name == "index.html":
+            return FileResponse(candidate, headers=no_cache)
         return FileResponse(candidate)
-    return FileResponse(index)
+    return FileResponse(index, headers=no_cache)
