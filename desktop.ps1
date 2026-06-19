@@ -43,6 +43,33 @@ if ($LASTEXITCODE -ne 0) {
     cargo install tauri-cli --version "^2.0" --locked
 }
 
+# --- ensure all app dependencies are present (idempotent) --------------------
+# A fast check; if anything is missing we run the full setup.ps1 (which is itself idempotent),
+# so `.\desktop.ps1` is a single "install if needed, then run" command.
+function Test-Provisioned {
+    $venvPy = Join-Path $root "backend\.venv\Scripts\python.exe"
+    if (-not (Test-Path $venvPy)) { return $false }
+    # backend python deps, including the image-tabs tab-generation stack
+    & $venvPy -c "import torch, demucs, fastapi, image_tabs, cv2, pytesseract, playwright" *> $null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    # Tesseract OCR (on PATH or extracted into LocalAppData)
+    $tessExe = Join-Path $env:LOCALAPPDATA "Tesseract-OCR\tesseract.exe"
+    if (-not (Get-Command tesseract -ErrorAction SilentlyContinue) -and -not (Test-Path $tessExe)) { return $false }
+    # Playwright Chromium downloaded
+    & $venvPy -c "import os,sys; from playwright.sync_api import sync_playwright; p=sync_playwright().start(); ok=os.path.exists(p.chromium.executable_path); p.stop(); sys.exit(0 if ok else 1)" *> $null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    # frontend deps
+    if (-not (Test-Path (Join-Path $root "frontend\node_modules"))) { return $false }
+    return $true
+}
+
+if (Test-Provisioned) {
+    Write-Host "Dependencies present." -ForegroundColor DarkGray
+} else {
+    Write-Host "Installing/updating dependencies (first run can take a while)..." -ForegroundColor Cyan
+    & (Join-Path $root "setup.ps1")
+}
+
 Write-Host "Launching Sound Splitter desktop app..." -ForegroundColor Cyan
 Write-Host "(First run installs dependencies and builds the UI automatically; a setup window may appear.)" -ForegroundColor DarkGray
 Push-Location (Join-Path $root "src-tauri")

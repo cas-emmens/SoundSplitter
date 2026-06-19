@@ -21,9 +21,15 @@ spotipy
 # Spectrogram rendering (stretch)
 matplotlib
 
-# Tab transcription: pitch tracking + polyphonic note detection.
-# basic-pitch pins tensorflow<2.16 (CPU) -> requires Python 3.11 and numpy<2.
+# Audio analysis helpers (used by separation / spectrogram).
 librosa
 scipy
-basic-pitch[onnx]
+
+# Tab generation: webpage capture + OCR via the image-tabs library (installed editable in
+# setup.ps1). OpenCV is pinned to a numpy-1.x build so it coexists with torch/demucs; Playwright
+# renders the tab page headlessly; pytesseract drives Tesseract OCR.
+opencv-python==4.10.0.84
+pytesseract
+Pillow>=10
+playwright
 numpy<2

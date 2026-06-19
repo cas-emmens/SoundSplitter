@@ -32,28 +32,29 @@ function Install-Dep($id, $name) {
 # --- prerequisites -----------------------------------------------------------
 Step "Checking prerequisites"
 
-# Python 3.11 (prefer the py launcher; auto-install if missing).
-# Pinned to 3.11 because basic-pitch (tab transcription) requires tensorflow<2.16,
-# which has no Python 3.13 wheel. torch/CUDA/Demucs all support 3.11.
+# Python (prefer the py launcher; auto-install if missing). basic-pitch is gone, so any of
+# 3.11-3.13 works; image-tabs / torch / CUDA / Demucs all support 3.13.
 function Resolve-Python {
     if (Get-Command py -ErrorAction SilentlyContinue) {
-        & py -3.11 --version *> $null
-        if ($LASTEXITCODE -eq 0) { return @("py", "-3.11") }
+        foreach ($v in @("-3.13", "-3.12", "-3.11")) {
+            & py $v --version *> $null
+            if ($LASTEXITCODE -eq 0) { return @("py", $v) }
+        }
     }
     if (Get-Command python -ErrorAction SilentlyContinue) {
-        Warn "Using 'python' on PATH (couldn't find 'py -3.11'). Make sure it's Python 3.11."
+        Warn "Using 'python' on PATH (no 'py' launcher). Make sure it's Python 3.11-3.13."
         return @("python")
     }
     return $null
 }
 $pyCmd = Resolve-Python
 if (-not $pyCmd) {
-    Warn "Python 3.11 not found - installing..."
-    Install-Dep "Python.Python.3.11" "Python 3.11"
+    Warn "Python not found - installing 3.13..."
+    Install-Dep "Python.Python.3.13" "Python 3.13"
     $pyCmd = Resolve-Python
 }
 if (-not $pyCmd) {
-    throw "Python 3.11 still not found after install. Open a NEW terminal and re-run .\setup.ps1"
+    throw "Python still not found after install. Open a NEW terminal and re-run .\setup.ps1"
 }
 Ok "Python: $((& $pyCmd[0] $pyCmd[1..($pyCmd.Length-1)] --version) 2>&1)"
 
@@ -103,6 +104,50 @@ Ok "PyTorch installed"
 & $venvPy -m pip install -r requirements.txt
 if ($LASTEXITCODE -ne 0) { throw "requirements.txt install failed." }
 Ok "Backend dependencies installed"
+
+# --- tab generation: image-tabs library + headless browser + OCR -------------
+Step "Setting up tab generation (image-tabs: web capture + OCR)"
+
+# image-tabs + canvas-to-image are sibling repos next to sound-splitter. Install editable so a
+# later frozen build (PyInstaller) bundles them. (Distribution TODO: bundle Chromium + Tesseract
+# into the installer too.)
+$canvas = Join-Path $root "..\canvas-to-image"
+$imgTabs = Join-Path $root "..\image-tabs"
+if ((Test-Path $canvas) -and (Test-Path $imgTabs)) {
+    & $venvPy -m pip install -e $canvas -e $imgTabs
+    if ($LASTEXITCODE -ne 0) { throw "image-tabs install failed." }
+    Ok "image-tabs installed"
+} else {
+    Warn "image-tabs / canvas-to-image not found next to sound-splitter - tab generation unavailable until they are."
+}
+
+# Headless Chromium for capturing the tab page (Playwright). Idempotent - skips if present.
+& $venvPy -m playwright install chromium
+if ($LASTEXITCODE -eq 0) { Ok "Playwright Chromium ready" } else { Warn "Playwright Chromium install failed - tab capture won't work." }
+
+# Tesseract OCR. image-tabs looks for it on PATH or at %LOCALAPPDATA%\Tesseract-OCR.
+$tessExe = Join-Path $env:LOCALAPPDATA "Tesseract-OCR\tesseract.exe"
+if ((Get-Command tesseract -ErrorAction SilentlyContinue) -or (Test-Path $tessExe)) {
+    Ok "Tesseract found"
+} else {
+    Warn "Tesseract not found - installing (no admin, into LocalAppData)..."
+    $sevenZip = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+    if (-not (Test-Path $sevenZip) -and $haveWinget) {
+        try { Install-Dep "7zip.7zip" "7-Zip" } catch { Warn "7-Zip install skipped: $_" }
+    }
+    if (Test-Path $sevenZip) {
+        $tmp = Join-Path $env:TEMP "tesseract-setup.exe"
+        $url = "https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.4.0.20240606.exe"
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+            & $sevenZip x -y ("-o" + (Join-Path $env:LOCALAPPDATA "Tesseract-OCR")) $tmp *> $null
+            if (Test-Path $tessExe) { Ok "Tesseract installed to $env:LOCALAPPDATA\Tesseract-OCR" }
+            else { Warn "Tesseract extraction failed - install it manually (UB-Mannheim) or set TESSERACT_CMD." }
+        } catch { Warn "Tesseract download failed: $_ - install manually or set TESSERACT_CMD." }
+    } else {
+        Warn "7-Zip unavailable - install Tesseract manually (UB-Mannheim), put tesseract.exe on PATH, or set TESSERACT_CMD."
+    }
+}
 
 if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"
