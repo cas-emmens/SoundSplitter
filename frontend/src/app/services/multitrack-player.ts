@@ -4,6 +4,8 @@ export interface StemSpec {
   name: string;
   url: string;
   offsetMs: number;
+  trimStartMs?: number;
+  trimEndMs?: number;
 }
 
 interface Track {
@@ -11,6 +13,8 @@ interface Track {
   buffer: AudioBuffer;
   gain: GainNode;
   offset: number;        // seconds, positive = stem starts later
+  trimStart: number;     // seconds removed from the front of the buffer
+  trimEnd: number;       // seconds removed from the end of the buffer
   source?: AudioBufferSourceNode;
   muted: boolean;
   volume: number;        // 0..1 user volume (independent of mute/solo)
@@ -61,13 +65,46 @@ export class MultitrackPlayer {
       const gain = this.ctx.createGain();
       gain.connect(this.ctx.destination);
       const offset = s.offsetMs / 1000;
+      const trimStart = Math.max(0, (s.trimStartMs ?? 0) / 1000);
+      const trimEnd = Math.max(0, (s.trimEndMs ?? 0) / 1000);
       this.tracks.set(s.name, {
-        name: s.name, buffer: buf, gain, offset, muted: false, volume: 1,
+        name: s.name, buffer: buf, gain, offset, trimStart, trimEnd, muted: false, volume: 1,
       });
       this.order.push(s.name);
-      this._duration = Math.max(this._duration, offset + buf.duration);
     }
+    this.recomputeDuration();
     this.applyGains();
+  }
+
+  /** Audible length of a track's trimmed region, in seconds. */
+  private trimmedDur(t: Track): number {
+    return Math.max(0, t.buffer.duration - t.trimStart - t.trimEnd);
+  }
+  private recomputeDuration() {
+    this._duration = 0;
+    for (const t of this.tracks.values()) {
+      this._duration = Math.max(this._duration, t.offset + this.trimmedDur(t));
+    }
+  }
+
+  /** Full (untrimmed) buffer length of a stem, for waveform scaling. */
+  bufferDuration(name: string) { return this.tracks.get(name)?.buffer.duration ?? 0; }
+
+  /** Live-update a stem's trim (ms from front/end). Returns the new total duration. */
+  setTrim(name: string, startMs: number, endMs: number): number {
+    const t = this.tracks.get(name);
+    if (!t) return this._duration;
+    t.trimStart = Math.max(0, startMs / 1000);
+    t.trimEnd = Math.max(0, endMs / 1000);
+    this.recomputeDuration();
+    if (this.playing) {
+      const p = Math.min(this.position(), this._duration);
+      this.stopSources();
+      this.playing = false;
+      this.pausedPos = p;
+      this.play();
+    }
+    return this._duration;
   }
 
   private effectiveGain(t: Track): number {
@@ -112,13 +149,15 @@ export class MultitrackPlayer {
     const startAt = this.ctx.currentTime + 0.03;
     const pos = this.pausedPos >= this._duration ? 0 : this.pausedPos;
     for (const t of this.tracks.values()) {
+      const dur = this.trimmedDur(t);
+      if (dur <= 0) continue;
+      const local = pos - t.offset;          // position within the stem's trimmed region
+      if (local >= dur) continue;            // stem already finished before pos
       const src = this.ctx.createBufferSource();
       src.buffer = t.buffer;
       src.connect(t.gain);
-      const local = pos - t.offset;          // source time corresponding to timeline pos
-      if (local >= t.buffer.duration) { continue; }
-      if (local >= 0) src.start(startAt, local);
-      else src.start(startAt - local, 0);    // stem hasn't begun yet; delay its start
+      if (local >= 0) src.start(startAt, t.trimStart + local, dur - local);
+      else src.start(startAt - local, t.trimStart, dur);  // not started yet; delay it
       t.source = src;
     }
     this.startCtxTime = startAt;

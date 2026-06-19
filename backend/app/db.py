@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS stems (
     path       TEXT NOT NULL,
     gain       REAL NOT NULL DEFAULT 1.0,
     offset_ms  INTEGER NOT NULL DEFAULT 0,
+    trim_start_ms INTEGER NOT NULL DEFAULT 0,   -- ms removed from the front
+    trim_end_ms   INTEGER NOT NULL DEFAULT 0,   -- ms removed from the end
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_stems_track ON stems(track_id);
@@ -52,6 +54,12 @@ def get_conn() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        # Add columns introduced after the first release to existing databases.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(stems)")}
+        for col in ("trim_start_ms", "trim_end_ms"):
+            if col not in cols:
+                conn.execute(
+                    f"ALTER TABLE stems ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
 
 
 # --- songs ---
@@ -132,7 +140,7 @@ def get_stem(stem_id: int) -> Optional[dict]:
 
 
 def update_stem(stem_id: int, **fields) -> None:
-    allowed = {"name", "gain", "offset_ms"}
+    allowed = {"name", "gain", "offset_ms", "trim_start_ms", "trim_end_ms"}
     sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not sets:
         return

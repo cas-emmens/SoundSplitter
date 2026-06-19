@@ -2,12 +2,15 @@ import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Api, SongDetail, Stem } from '../../services/api';
 import { MultitrackPlayer } from '../../services/multitrack-player';
+import { StemWaveform } from './stem-waveform';
 
 interface StemVM {
   id: number;
   name: string;
   kind: 'model' | 'user';
   offsetMs: number;
+  trimStartMs: number;
+  trimEndMs: number;
   muted: boolean;
   solo: boolean;
   volume: number;
@@ -15,7 +18,7 @@ interface StemVM {
 
 @Component({
   selector: 'app-player',
-  imports: [RouterLink],
+  imports: [RouterLink, StemWaveform],
   templateUrl: './player.html',
   styleUrl: './player.css',
 })
@@ -37,6 +40,10 @@ export class PlayerPage implements OnInit, OnDestroy {
   importOffset = signal(0);
   importFile: File | null = null;
   importing = signal(false);
+
+  // export
+  exporting = signal(false);
+  exportPath = signal<string | null>(null);
 
   private raf = 0;
   private trackId = '';
@@ -72,6 +79,7 @@ export class PlayerPage implements OnInit, OnDestroy {
     this.ready.set(false);
     const specs = s.stems.map((st) => ({
       name: st.name, url: this.api.fileUrl(s.track_id, st.name), offsetMs: st.offset_ms,
+      trimStartMs: st.trim_start_ms, trimEndMs: st.trim_end_ms,
     }));
     await this.player.load(specs);
     this.duration.set(this.player.duration);
@@ -82,6 +90,7 @@ export class PlayerPage implements OnInit, OnDestroy {
   private toVM(st: Stem): StemVM {
     return {
       id: st.id, name: st.name, kind: st.kind, offsetMs: st.offset_ms,
+      trimStartMs: st.trim_start_ms, trimEndMs: st.trim_end_ms,
       muted: this.player.isMuted(st.name), solo: this.player.isSolo(st.name),
       volume: this.player.getVolume(st.name),
     };
@@ -138,6 +147,22 @@ export class PlayerPage implements OnInit, OnDestroy {
   updateOffset(vm: StemVM, ev: Event) {
     const ms = +(ev.target as HTMLInputElement).value;
     this.api.patchStem(vm.id, { offset_ms: ms }).subscribe(() => this.load());
+  }
+
+  onTrim(vm: StemVM, e: { startMs: number; endMs: number }) {
+    vm.trimStartMs = e.startMs;
+    vm.trimEndMs = e.endMs;
+    this.duration.set(this.player.setTrim(vm.name, e.startMs, e.endMs));
+    this.api.patchStem(vm.id, { trim_start_ms: e.startMs, trim_end_ms: e.endMs }).subscribe();
+  }
+
+  exportDaw() {
+    this.exporting.set(true);
+    this.exportPath.set(null);
+    this.api.exportToDaw(this.trackId).subscribe({
+      next: (r) => { this.exporting.set(false); this.exportPath.set(r.path); },
+      error: () => this.exporting.set(false),
+    });
   }
 
   fmt(sec: number): string {

@@ -34,6 +34,10 @@
 .vol { accent-color: var(--accent); }
 .offset { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .offset input { width: 72px; }
+.stem .wave { display: block; grid-column: 1 / -1; margin-top: 4px; }
+.transport .export { border-color: var(--accent); color: var(--accent); }
+.export-note { margin: -8px 0 16px; }
+.export-note code { background: var(--panel-2); padding: 1px 6px; border-radius: 6px; word-break: break-all; }
 
 .import { margin-top: 22px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
 .import h2 { margin: 0 0 12px; font-size: 15px; color: var(--muted); }

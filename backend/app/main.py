@@ -1,6 +1,7 @@
 """FastAPI app: Spotify auth, capture control, library, stems, files."""
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -154,6 +155,20 @@ def delete_song(track_id: str) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/songs/{track_id}/export")
+def export_song(track_id: str) -> dict:
+    """Render trimmed + aligned stems to a folder and open it (local desktop app)."""
+    path = library.export_for_daw(track_id)
+    if path is None:
+        raise HTTPException(404, "nothing to export")
+    try:
+        if os.name == "nt":
+            os.startfile(path)  # type: ignore[attr-defined]  # opens Explorer
+    except Exception:
+        pass
+    return {"path": path}
+
+
 @app.get("/api/jobs")
 def get_jobs() -> dict:
     return jobs.status()
@@ -181,7 +196,9 @@ def patch_stem(stem_id: int, payload: dict) -> dict:
     if db.get_stem(stem_id) is None:
         raise HTTPException(404, "stem not found")
     db.update_stem(stem_id, name=payload.get("name"),
-                   gain=payload.get("gain"), offset_ms=payload.get("offset_ms"))
+                   gain=payload.get("gain"), offset_ms=payload.get("offset_ms"),
+                   trim_start_ms=payload.get("trim_start_ms"),
+                   trim_end_ms=payload.get("trim_end_ms"))
     return db.get_stem(stem_id)
 
 
@@ -205,6 +222,15 @@ def get_stem_file(track_id: str, stem_name: str):
     if path is None or not path.exists():
         raise HTTPException(404, "stem file not found")
     return FileResponse(path, media_type="audio/flac")
+
+
+@app.get("/api/files/{track_id}/{stem_name}/peaks")
+def get_stem_peaks(track_id: str, stem_name: str) -> dict:
+    name = stem_name[:-5] if stem_name.endswith(".flac") else stem_name
+    data = library.stem_peaks(track_id, name)
+    if data is None:
+        raise HTTPException(404, "stem file not found")
+    return data
 
 
 # --- built frontend (SPA) ---

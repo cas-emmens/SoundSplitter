@@ -52,3 +52,19 @@ def write_flac(path: str | Path, data: np.ndarray, sr: int = config.SAMPLE_RATE)
         arr = arr.T
     np.clip(arr, -1.0, 1.0, out=arr)
     sf.write(str(path), arr, sr, format="FLAC")
+
+
+def write_wav(path: str | Path, data: np.ndarray, sr: int = config.SAMPLE_RATE,
+              subtype: str = "PCM_24") -> None:
+    """Write float32 [samples, channels] (or [channels, samples]) to WAV.
+
+    24-bit PCM by default — universally importable into any DAW.
+    """
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    arr = np.asarray(data, dtype=np.float32)
+    if arr.ndim == 1:
+        arr = arr[:, None]
+    elif arr.ndim == 2 and arr.shape[0] in (1, 2) and arr.shape[0] < arr.shape[1]:
+        arr = arr.T
+    np.clip(arr, -1.0, 1.0, out=arr)
+    sf.write(str(path), arr, sr, subtype=subtype)

@@ -8,7 +8,10 @@ export interface Stem {
   name: string;
   gain: number;
   offset_ms: number;
+  trim_start_ms: number;
+  trim_end_ms: number;
 }
+export interface Peaks { peaks: number[]; duration: number; }
 export interface Song {
   track_id: string;
   title: string;
@@ -102,8 +105,12 @@ export class Api {
     fd.append('offset_ms', String(offsetMs));
     return this.http.post<Stem>(`${this.base}/songs/${id}/stems`, fd);
   }
-  patchStem(stemId: number, body: Partial<Pick<Stem, 'name' | 'gain' | 'offset_ms'>>) {
+  patchStem(stemId: number, body: Partial<Pick<Stem, 'name' | 'gain' | 'offset_ms' | 'trim_start_ms' | 'trim_end_ms'>>) {
     return this.http.patch<Stem>(`${this.base}/stems/${stemId}`, body);
+  }
+  exportToDaw(id: string) { return this.http.post<{ path: string }>(`${this.base}/songs/${id}/export`, {}); }
+  stemPeaks(trackId: string, stemName: string) {
+    return this.http.get<Peaks>(`${this.base}/files/${trackId}/${encodeURIComponent(stemName)}/peaks`);
   }
   deleteStem(stemId: number) { return this.http.delete<any>(`${this.base}/stems/${stemId}`); }
 

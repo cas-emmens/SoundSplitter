@@ -24,7 +24,14 @@
       <button class="ghost practice" (click)="practiceMode()" title="Mute vocals + guitar">
         🎸 Practice mode
       </button>
+      <button class="ghost export" (click)="exportDaw()" [disabled]="exporting()"
+              title="Render trimmed, aligned stems as WAVs for a DAW">
+        {{ exporting() ? 'Exporting…' : '⤓ Export to DAW' }}
+      </button>
     </section>
+    @if (exportPath(); as p) {
+      <p class="muted small export-note">Exported stems to <code>{{ p }}</code> (opened the folder).</p>
+    }
 
     <!-- stems -->
     <section class="stems">
@@ -44,6 +51,10 @@
             </label>
             <button class="mini del" (click)="deleteStem(vm)">✕</button>
           }
+          <app-stem-waveform class="wave"
+            [trackId]="s.track_id" [name]="vm.name"
+            [trimStartMs]="vm.trimStartMs" [trimEndMs]="vm.trimEndMs"
+            (trimChange)="onTrim(vm, $event)" />
         </div>
       }
     </section>
