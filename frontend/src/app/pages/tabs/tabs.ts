@@ -20,6 +20,8 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
 
   private atHost = viewChild.required<ElementRef<HTMLDivElement>>('atHost');
   private scrollHost = viewChild.required<ElementRef<HTMLDivElement>>('scrollHost');
+  private playhead = viewChild.required<ElementRef<HTMLDivElement>>('playhead');
+  private barBounds: { x: number; y: number; w: number; h: number }[] = [];
 
   song = signal<SongDetail | null>(null);
   tabs = signal<Tab[]>([]);
@@ -112,6 +114,8 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
       },
     });
     this.attachExternalMedia();
+    // Recapture bar positions whenever the score (re)lays out, for the gliding playhead.
+    (this.at as any).renderFinished?.on?.(() => this.captureBarBounds());
   }
 
   /** Bars per line: 4 on wide monitors, 2 on smaller ones (so bars fill the width). */
@@ -152,13 +156,44 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     cancelAnimationFrame(this.raf);
     const output = this.at?.player?.output as any;
     if (output && this.mix.isPlaying) {
-      output.updatePosition(this.mix.position() * 1000);
+      output.updatePosition(this.mix.position() * 1000);  // drives alphaTab's bar highlight
+      this.updatePlayhead();
       this.autoScroll();
       this.raf = requestAnimationFrame(this.loop);
     } else {
       this.playing.set(false);
     }
   };
+
+  /** Bar rectangles from alphaTab's layout, in order — one per measure. */
+  private captureBarBounds() {
+    const lookup: any = (this.at as any)?.renderer?.boundsLookup;
+    const out: { x: number; y: number; w: number; h: number }[] = [];
+    for (const sys of lookup?.staffSystems ?? []) {
+      for (const bar of sys.bars ?? []) {
+        const b = bar.realBounds ?? bar.visualBounds;
+        if (b) out.push({ x: b.x, y: b.y, w: b.w, h: b.h });
+      }
+    }
+    this.barBounds = out;
+    this.updatePlayhead();
+  }
+
+  /** Glide the playhead linearly across the bars by audio progress (constant pace, no jumps). */
+  private updatePlayhead() {
+    const ph = this.playhead().nativeElement;
+    const host = this.atHost().nativeElement;
+    const bars = this.barBounds;
+    const dur = this.mix.duration;
+    if (!bars.length || dur <= 0) { ph.style.display = 'none'; return; }
+    const f = Math.max(0, Math.min(this.mix.position() / dur, 0.999999)) * bars.length;
+    const idx = Math.min(Math.floor(f), bars.length - 1);
+    const bar = bars[idx];
+    ph.style.left = `${host.offsetLeft + bar.x + (f - idx) * bar.w}px`;
+    ph.style.top = `${host.offsetTop + bar.y}px`;
+    ph.style.height = `${bar.h}px`;
+    ph.style.display = 'block';
+  }
 
   private autoScroll() {
     const scroller = this.scrollHost().nativeElement;
