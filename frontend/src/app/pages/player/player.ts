@@ -1,6 +1,7 @@
-import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { Api, SongDetail, Stem } from '../../services/api';
+import { FormsModule } from '@angular/forms';
+import { Api, SongDetail, Stem, Tab } from '../../services/api';
 import { MultitrackPlayer } from '../../services/multitrack-player';
 import { StemWaveform } from './stem-waveform';
 
@@ -18,7 +19,7 @@ interface StemVM {
 
 @Component({
   selector: 'app-player',
-  imports: [RouterLink, StemWaveform],
+  imports: [RouterLink, StemWaveform, FormsModule],
   templateUrl: './player.html',
   styleUrl: './player.css',
 })
@@ -44,6 +45,18 @@ export class PlayerPage implements OnInit, OnDestroy {
   // export
   exporting = signal(false);
   exportPath = signal<string | null>(null);
+
+  // tabs
+  tabs = signal<Tab[]>([]);
+  hasTabs = computed(() => this.tabs().some((t) => t.status === 'done'));
+  pendingTabs = computed(() => this.tabs().filter((t) => t.status === 'pending'));
+  errorTabs = computed(() => this.tabs().filter((t) => t.status === 'error'));
+  showTabModal = signal(false);
+  tabName = signal('');
+  tabUrl = signal('');
+  tabStemId = signal<number | null>(null);
+  creatingTab = signal(false);
+  tabError = signal('');
 
   private raf = 0;
   private trackId = '';
@@ -72,6 +85,15 @@ export class PlayerPage implements OnInit, OnDestroy {
       this.song.set(s);
       await this.buildPlayer(s);
       this.loading.set(false);
+    });
+    this.refreshTabs();
+  }
+
+  private refreshTabs() {
+    this.api.listTabs(this.trackId).subscribe((r) => {
+      this.tabs.set(r.tabs);
+      // resume polling any still-generating tabs (e.g. after a page reload)
+      for (const t of r.tabs) if (t.status === 'pending') this.pollTab(t.id);
     });
   }
 
@@ -163,6 +185,45 @@ export class PlayerPage implements OnInit, OnDestroy {
       next: (r) => { this.exporting.set(false); this.exportPath.set(r.path); },
       error: () => this.exporting.set(false),
     });
+  }
+
+  // --- tabs (generate from a webpage URL) ---
+  openTabModal() {
+    const stems = this.song()?.stems ?? [];
+    this.tabStemId.set(stems[0]?.id ?? null);
+    this.tabName.set('');
+    this.tabUrl.set('');
+    this.tabError.set('');
+    this.showTabModal.set(true);
+  }
+  closeTabModal() { this.showTabModal.set(false); }
+
+  createTab() {
+    const name = this.tabName().trim();
+    const url = this.tabUrl().trim();
+    if (!name || !url) { this.tabError.set('Name and URL are required.'); return; }
+    this.creatingTab.set(true);
+    this.api.createTab(this.trackId, { name, url, stem_id: this.tabStemId() }).subscribe({
+      next: (tab) => {
+        this.creatingTab.set(false);
+        this.showTabModal.set(false);
+        this.tabs.update((list) => [...list, tab]);
+        this.pollTab(tab.id);
+      },
+      error: (e) => {
+        this.creatingTab.set(false);
+        this.tabError.set(e?.error?.detail || 'Could not start tab generation.');
+      },
+    });
+  }
+
+  private pollTab(id: number) {
+    const iv = setInterval(() => {
+      this.api.getTab(id).subscribe((t) => {
+        this.tabs.update((list) => list.map((x) => (x.id === id ? t : x)));
+        if (t.status !== 'pending') clearInterval(iv);
+      });
+    }, 3000);
   }
 
   fmt(sec: number): string {

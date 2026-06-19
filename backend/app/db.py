@@ -35,6 +35,18 @@ CREATE TABLE IF NOT EXISTS stems (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_stems_track ON stems(track_id);
+CREATE TABLE IF NOT EXISTS tabs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id   TEXT NOT NULL REFERENCES songs(track_id) ON DELETE CASCADE,
+    stem_id    INTEGER REFERENCES stems(id) ON DELETE SET NULL,  -- audio stem this tab follows
+    name       TEXT NOT NULL,
+    source_url TEXT,                       -- the tab webpage it was generated from
+    alphatex   TEXT,                       -- the transcription (filled when status='done')
+    status     TEXT NOT NULL DEFAULT 'pending',  -- pending | done | error
+    error      TEXT,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tabs_track ON tabs(track_id);
 """
 
 
@@ -158,3 +170,41 @@ def clear_model_stems(track_id: str) -> None:
     """Remove model stems before (re)writing them; user stems are preserved."""
     with get_conn() as conn:
         conn.execute("DELETE FROM stems WHERE track_id=? AND kind='model'", (track_id,))
+
+
+# --- tabs (manually added, generated from a webpage URL via the image-tabs library) ---
+
+def create_tab(track_id: str, name: str, stem_id: int | None, source_url: str) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO tabs (track_id, stem_id, name, source_url, status, created_at)
+               VALUES (?, ?, ?, ?, 'pending', ?)""",
+            (track_id, stem_id, name, source_url, time.time()),
+        )
+        return int(cur.lastrowid)
+
+
+def set_tab_result(tab_id: int, *, alphatex: Optional[str] = None,
+                   status: str = "done", error: Optional[str] = None) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE tabs SET alphatex=?, status=?, error=? WHERE id=?",
+                     (alphatex, status, error, tab_id))
+
+
+def get_tab(tab_id: int) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM tabs WHERE id=?", (tab_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_tabs(track_id: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tabs WHERE track_id=? ORDER BY created_at", (track_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_tab(tab_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM tabs WHERE id=?", (tab_id,))

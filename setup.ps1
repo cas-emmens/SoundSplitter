@@ -32,26 +32,28 @@ function Install-Dep($id, $name) {
 # --- prerequisites -----------------------------------------------------------
 Step "Checking prerequisites"
 
-# Python 3.13 (prefer the py launcher; auto-install if missing)
+# Python 3.11 (prefer the py launcher; auto-install if missing).
+# Pinned to 3.11 because basic-pitch (tab transcription) requires tensorflow<2.16,
+# which has no Python 3.13 wheel. torch/CUDA/Demucs all support 3.11.
 function Resolve-Python {
     if (Get-Command py -ErrorAction SilentlyContinue) {
-        & py -3.13 --version *> $null
-        if ($LASTEXITCODE -eq 0) { return @("py", "-3.13") }
+        & py -3.11 --version *> $null
+        if ($LASTEXITCODE -eq 0) { return @("py", "-3.11") }
     }
     if (Get-Command python -ErrorAction SilentlyContinue) {
-        Warn "Using 'python' on PATH (couldn't find 'py -3.13'). Make sure it's Python 3.13."
+        Warn "Using 'python' on PATH (couldn't find 'py -3.11'). Make sure it's Python 3.11."
         return @("python")
     }
     return $null
 }
 $pyCmd = Resolve-Python
 if (-not $pyCmd) {
-    Warn "Python 3.13 not found - installing..."
-    Install-Dep "Python.Python.3.13" "Python 3.13"
+    Warn "Python 3.11 not found - installing..."
+    Install-Dep "Python.Python.3.11" "Python 3.11"
     $pyCmd = Resolve-Python
 }
 if (-not $pyCmd) {
-    throw "Python 3.13 still not found after install. Open a NEW terminal and re-run .\setup.ps1"
+    throw "Python 3.11 still not found after install. Open a NEW terminal and re-run .\setup.ps1"
 }
 Ok "Python: $((& $pyCmd[0] $pyCmd[1..($pyCmd.Length-1)] --version) 2>&1)"
 

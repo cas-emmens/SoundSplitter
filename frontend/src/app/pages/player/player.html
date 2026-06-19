@@ -9,7 +9,20 @@
       <h1>{{ s.title }}</h1>
       <div class="muted">{{ s.artist }}</div>
     </div>
+    <div class="head-actions">
+      <button class="tabs-link" (click)="openTabModal()">+ Add tab</button>
+      @if (hasTabs()) {
+        <a class="tabs-link" [routerLink]="['/tabs', s.track_id]">🎸 Go to tabs</a>
+      }
+    </div>
   </header>
+
+  @if (pendingTabs().length) {
+    <p class="muted small">Generating {{ pendingTabs().length }} tab(s) from the web — this can take a few minutes.</p>
+  }
+  @for (t of errorTabs(); track t.id) {
+    <p class="tab-err small">Tab “{{ t.name }}” failed: {{ t.error }}</p>
+  }
 
   @if (!ready()) {
     <p class="muted">Decoding stems…</p>
@@ -72,6 +85,36 @@
       </div>
       <p class="muted small">Record yourself playing along (in any app), then drop the file here. Use offset to nudge it into sync.</p>
     </section>
+  }
+
+  <!-- add-tab modal -->
+  @if (showTabModal()) {
+    <div class="modal-backdrop" (click)="closeTabModal()">
+      <div class="modal" (click)="$event.stopPropagation()">
+        <h2>Add a tab</h2>
+        <label>Couple to stem
+          <select [ngModel]="tabStemId()" (ngModelChange)="tabStemId.set($event)">
+            @for (st of s.stems; track st.id) { <option [ngValue]="st.id">{{ st.name }}</option> }
+          </select>
+        </label>
+        <label>Name
+          <input type="text" [ngModel]="tabName()" (ngModelChange)="tabName.set($event)"
+                 placeholder="e.g. Acoustic intro" />
+        </label>
+        <label>Tab webpage URL
+          <input type="text" [ngModel]="tabUrl()" (ngModelChange)="tabUrl.set($event)"
+                 placeholder="https://www.songsterr.com/…" />
+        </label>
+        @if (tabError()) { <p class="tab-err">{{ tabError() }}</p> }
+        <div class="modal-actions">
+          <button (click)="closeTabModal()">Cancel</button>
+          <button class="primary" [disabled]="creatingTab()" (click)="createTab()">
+            {{ creatingTab() ? 'Starting…' : 'Generate tab' }}
+          </button>
+        </div>
+        <p class="muted small">We capture the page and read the tab for you — it can take a few minutes.</p>
+      </div>
+    </div>
   }
 } @else {
   <p class="muted">Song not found. <a routerLink="/library">Back to library</a></p>

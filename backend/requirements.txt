@@ -20,3 +20,10 @@ spotipy
 
 # Spectrogram rendering (stretch)
 matplotlib
+
+# Tab transcription: pitch tracking + polyphonic note detection.
+# basic-pitch pins tensorflow<2.16 (CPU) -> requires Python 3.11 and numpy<2.
+librosa
+scipy
+basic-pitch[onnx]
+numpy<2

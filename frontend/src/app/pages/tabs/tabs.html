@@ -1,0 +1,48 @@
+<div class="tabs-page">
+  <header class="tabs-head">
+    <a class="back" [routerLink]="['/player', trackId]">← Back to player</a>
+    <h2>{{ song()?.title }} <span class="artist">— {{ song()?.artist }}</span></h2>
+  </header>
+
+  @if (tabs().length) {
+    <div class="toolbar">
+      <span class="lbl">Tab:</span>
+      <select [ngModel]="selectedId()" (ngModelChange)="selectTab($event)">
+        @for (t of tabs(); track t.id) { <option [ngValue]="t.id">{{ t.name }}</option> }
+      </select>
+      <span class="sep"></span>
+      <button (click)="togglePlay()" [disabled]="!mixerReady()">{{ playing() ? '⏸ Pause' : '▶ Play' }}</button>
+      <button (click)="stop()">⏹ Stop</button>
+    </div>
+
+    @if (status()) { <p class="status">{{ status() }}</p> }
+
+    <div class="tab-body">
+      <div #scrollHost class="score-scroll">
+        <div #atHost class="score"></div>
+      </div>
+
+      <aside class="sidecar">
+        <div class="sidecar-head">
+          <span>Stems</span>
+          <button class="link" (click)="allOn()">all on</button>
+        </div>
+        @for (s of stems(); track s.name) {
+          <div class="stem-row" [class.is-muted]="s.muted" [class.is-focused]="s.focused">
+            <span class="stem-name">{{ s.name }}</span>
+            <button class="chip" [class.on]="!s.muted" (click)="toggleMute(s.name)" title="Mute / unmute">
+              {{ s.muted ? 'muted' : 'on' }}
+            </button>
+            <button class="chip focus" [class.on]="s.focused" (click)="toggleFocus(s.name)" title="Focus this stem (solo)">
+              focus
+            </button>
+          </div>
+        }
+        @if (!stems().length) { <span class="muted">No stems for this song.</span> }
+      </aside>
+    </div>
+  } @else {
+    <p class="hint">No tabs yet. On the player page, use <strong>Add tab</strong>, paste the URL of a
+      tab webpage (e.g. Songsterr), and it’ll be transcribed and show up here.</p>
+  }
+</div>

@@ -69,6 +69,18 @@ export interface NowPlaying {
 }
 export interface Jobs { current: string | null; queued: string[]; }
 
+export interface Tab {
+  id: number;
+  track_id: string;
+  stem_id: number | null;
+  name: string;
+  source_url: string | null;
+  status: 'pending' | 'done' | 'error';
+  error: string | null;
+  alphatex: string | null;
+  created_at: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class Api {
   private http = inject(HttpClient);
@@ -117,5 +129,19 @@ export class Api {
   spotifyLoginUrl() { return `${this.base}/spotify/login`; }
   fileUrl(trackId: string, stemName: string) {
     return `${this.base}/files/${trackId}/${encodeURIComponent(stemName)}.flac`;
+  }
+
+  // --- tabs (generated from a webpage URL via the image-tabs library) ---
+  listTabs(trackId: string) {
+    return this.http.get<{ tabs: Tab[] }>(`${this.base}/songs/${trackId}/tabs`);
+  }
+  createTab(trackId: string, body: { name: string; url: string; stem_id: number | null }) {
+    return this.http.post<Tab>(`${this.base}/songs/${trackId}/tabs`, body);
+  }
+  getTab(tabId: number) {
+    return this.http.get<Tab>(`${this.base}/tabs/${tabId}`);
+  }
+  deleteTab(tabId: number) {
+    return this.http.delete<{ ok: boolean }>(`${this.base}/tabs/${tabId}`);
   }
 }

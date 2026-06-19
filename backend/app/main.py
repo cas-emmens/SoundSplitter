@@ -9,7 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
-from . import capture, config, db, jobs, library, separator, spotify
+from . import (capture, config, db, jobs, library, separator, spotify, tabgen)
 
 app = FastAPI(title="sound-splitter")
 
@@ -172,6 +172,54 @@ def export_song(track_id: str) -> dict:
 @app.get("/api/jobs")
 def get_jobs() -> dict:
     return jobs.status()
+
+
+# --- tabs (added manually, generated from a webpage URL via the image-tabs library) ---
+def _tab_dict(row: dict) -> dict:
+    return {
+        "id": row["id"], "track_id": row["track_id"], "stem_id": row["stem_id"],
+        "name": row["name"], "source_url": row["source_url"],
+        "status": row["status"], "error": row["error"],
+        "alphatex": row["alphatex"], "created_at": row["created_at"],
+    }
+
+
+@app.post("/api/songs/{track_id}/tabs")
+def create_tab(track_id: str, payload: dict) -> dict:
+    """Create a tab for a song from a webpage URL, transcribed in the background.
+
+    Body: ``{name, url, stem_id?}``. The tab is coupled to an audio stem so the tabs screen
+    knows which track it follows. Generation (headless capture + OCR) runs asynchronously; poll
+    GET /api/tabs/{id} until status is 'done' or 'error'.
+    """
+    if db.get_song(track_id) is None:
+        raise HTTPException(404, "song not found")
+    name = (payload.get("name") or "").strip()
+    url = (payload.get("url") or "").strip()
+    if not name or not url:
+        raise HTTPException(400, "name and url are required")
+    tab_id = db.create_tab(track_id, name, payload.get("stem_id"), url)
+    tabgen.start(tab_id, url, name)
+    return _tab_dict(db.get_tab(tab_id))
+
+
+@app.get("/api/songs/{track_id}/tabs")
+def list_tabs(track_id: str) -> dict:
+    return {"tabs": [_tab_dict(t) for t in db.get_tabs(track_id)]}
+
+
+@app.get("/api/tabs/{tab_id}")
+def get_tab(tab_id: int) -> dict:
+    tab = db.get_tab(tab_id)
+    if tab is None:
+        raise HTTPException(404, "tab not found")
+    return _tab_dict(tab)
+
+
+@app.delete("/api/tabs/{tab_id}")
+def delete_tab(tab_id: int) -> dict:
+    db.delete_tab(tab_id)
+    return {"ok": True}
 
 
 # --- stems ---

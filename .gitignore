@@ -5,9 +5,11 @@ backend/data/
 # Python
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+.venv*/
+venv*/
 *.egg-info/
+# stray nested PoC venv from an early experiment
+backend/backend/
 
 # Audio working dirs
 backend/uploads/
