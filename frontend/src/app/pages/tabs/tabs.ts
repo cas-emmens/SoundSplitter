@@ -1,4 +1,4 @@
-import { Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import * as alphaTab from '@coderline/alphatab';
@@ -13,7 +13,7 @@ interface StemRow { name: string; muted: boolean; focused: boolean; }
   templateUrl: './tabs.html',
   styleUrl: './tabs.css',
 })
-export class TabsPage implements OnInit, OnDestroy {
+export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   private api = inject(Api);
   private route = inject(ActivatedRoute);
   private mix = inject(MultitrackPlayer);
@@ -47,8 +47,18 @@ export class TabsPage implements OnInit, OnDestroy {
     });
   }
 
+  // The score host only exists after the view is initialised; create alphaTab here (not in the
+  // async data callback) and render whatever is already selected, so the first paint isn't blank.
+  ngAfterViewInit() {
+    this.ensureAlphaTab();
+    this.renderSelected();
+    window.addEventListener('resize', this.onResize);
+  }
+
   ngOnDestroy() {
     cancelAnimationFrame(this.raf);
+    clearTimeout(this.resizeTimer);
+    window.removeEventListener('resize', this.onResize);
     this.mix.stop();
     this.at?.destroy();
   }
@@ -70,20 +80,30 @@ export class TabsPage implements OnInit, OnDestroy {
 
   selectTab(id: number) {
     this.selectedId.set(id);
-    const tab = this.selected();
-    if (!tab?.alphatex) return;
     this.mix.seek(0);
     this.playing.set(false);
-    this.ensureAlphaTab();
-    try { this.at!.tex(tab.alphatex); this.status.set(''); }
-    catch { this.status.set('Could not render this tab.'); }
+    this.renderSelected();
+  }
+
+  /** Render the currently-selected tab — no-op until both alphaTab and a tab are ready. */
+  private renderSelected() {
+    const tab = this.selected();
+    if (!this.at || !tab?.alphatex) return;
+    try {
+      this.at.tex(tab.alphatex);
+      // Re-render once after layout so the first paint isn't blank (host may be mid-layout).
+      requestAnimationFrame(() => this.at?.render());
+      this.status.set('');
+    } catch {
+      this.status.set('Could not render this tab.');
+    }
   }
 
   private ensureAlphaTab() {
     if (this.at) return;
     this.at = new alphaTab.AlphaTabApi(this.atHost().nativeElement, {
       core: { fontDirectory: '/alphatab/font/', useWorkers: false },
-      display: { layoutMode: alphaTab.LayoutMode.Page, scale: 0.9 },
+      display: { layoutMode: alphaTab.LayoutMode.Page, scale: 1.0, barsPerRow: this.barsPerRow() },
       player: {
         playerMode: alphaTab.PlayerMode.EnabledExternalMedia,
         enableCursor: true,
@@ -93,6 +113,22 @@ export class TabsPage implements OnInit, OnDestroy {
     });
     this.attachExternalMedia();
   }
+
+  /** Bars per line: 4 on wide monitors, 2 on smaller ones (so bars fill the width). */
+  private barsPerRow() { return window.innerWidth >= 1200 ? 4 : 2; }
+
+  private applyLayout() {
+    if (!this.at) return;
+    this.at.settings.display.barsPerRow = this.barsPerRow();
+    this.at.updateSettings();
+    this.at.render();
+  }
+
+  private resizeTimer = 0;
+  private onResize = () => {
+    clearTimeout(this.resizeTimer);
+    this.resizeTimer = window.setTimeout(() => this.applyLayout(), 150);
+  };
 
   /** Drive alphaTab's transport from the multitrack mixer (instead of one <audio>). */
   private attachExternalMedia(retries = 30) {
