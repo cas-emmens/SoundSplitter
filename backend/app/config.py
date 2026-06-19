@@ -50,3 +50,9 @@ SPOTIFY_CACHE = DATA_DIR / ".spotify_token_cache"
 
 # --- Server ---
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:4200")
+# Built Angular app. When present, the backend serves it at "/" so the desktop
+# (Tauri) webview and a plain browser can load the whole app from this origin.
+FRONTEND_DIST = Path(os.getenv(
+    "FRONTEND_DIST",
+    str(BACKEND_DIR.parent / "frontend" / "dist" / "frontend" / "browser"),
+))

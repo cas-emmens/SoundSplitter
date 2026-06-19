@@ -12,33 +12,66 @@ function Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 function Warn($msg) { Write-Host "  ! $msg" -ForegroundColor Yellow }
 function Ok($msg)   { Write-Host "  + $msg" -ForegroundColor Green }
 
+# Pull newly-installed tools onto PATH without needing a fresh shell.
+function Update-SessionPath {
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                [Environment]::GetEnvironmentVariable("Path", "User")
+}
+
+$haveWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+function Install-Dep($id, $name) {
+    if (-not $haveWinget) {
+        throw "$name is required but winget isn't available to install it automatically. " +
+              "Install $name manually, then re-run .\setup.ps1"
+    }
+    Step "Installing $name (winget: $id)"
+    winget install --id $id -e --accept-source-agreements --accept-package-agreements --disable-interactivity
+    Update-SessionPath
+}
+
 # --- prerequisites -----------------------------------------------------------
 Step "Checking prerequisites"
 
-# Python 3.13 (prefer the py launcher)
-$pyCmd = $null
-if (Get-Command py -ErrorAction SilentlyContinue) {
-    & py -3.13 --version *> $null
-    if ($LASTEXITCODE -eq 0) { $pyCmd = @("py", "-3.13") }
+# Python 3.13 (prefer the py launcher; auto-install if missing)
+function Resolve-Python {
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        & py -3.13 --version *> $null
+        if ($LASTEXITCODE -eq 0) { return @("py", "-3.13") }
+    }
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        Warn "Using 'python' on PATH (couldn't find 'py -3.13'). Make sure it's Python 3.13."
+        return @("python")
+    }
+    return $null
 }
-if (-not $pyCmd -and (Get-Command python -ErrorAction SilentlyContinue)) {
-    $pyCmd = @("python")
-    Warn "Using 'python' on PATH (couldn't find 'py -3.13'). Make sure it's Python 3.13."
+$pyCmd = Resolve-Python
+if (-not $pyCmd) {
+    Warn "Python 3.13 not found - installing..."
+    Install-Dep "Python.Python.3.13" "Python 3.13"
+    $pyCmd = Resolve-Python
 }
 if (-not $pyCmd) {
-    throw "Python 3.13 not found. Install it from https://www.python.org/downloads/ (check 'Add to PATH'), then re-run."
+    throw "Python 3.13 still not found after install. Open a NEW terminal and re-run .\setup.ps1"
 }
 Ok "Python: $((& $pyCmd[0] $pyCmd[1..($pyCmd.Length-1)] --version) 2>&1)"
 
-# Node
+# Node (auto-install if missing)
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    throw "Node.js not found. Install the LTS from https://nodejs.org/ , then re-run."
+    Warn "Node.js not found - installing..."
+    Install-Dep "OpenJS.NodeJS.LTS" "Node.js (LTS)"
+}
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    throw "Node.js still not found after install. Open a NEW terminal and re-run .\setup.ps1"
 }
 Ok "Node: $(node --version)"
 
-# ffmpeg (only needed to import your own non-WAV/FLAC recordings)
+# ffmpeg (optional - only needed to import your own non-WAV/FLAC recordings)
+if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -and $haveWinget) {
+    Warn "ffmpeg not found - installing (optional)..."
+    try { Install-Dep "Gyan.FFmpeg" "ffmpeg" } catch { Warn "ffmpeg install skipped: $_" }
+}
 if (Get-Command ffmpeg -ErrorAction SilentlyContinue) { Ok "ffmpeg found" }
-else { Warn "ffmpeg not found - optional, only needed to import your own takes. https://www.gyan.dev/ffmpeg/builds/" }
+else { Warn "ffmpeg not available - optional, only needed to import your own takes." }
 
 # GPU detection
 $hasGpu = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)

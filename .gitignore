@@ -23,6 +23,10 @@ node_modules/
 frontend/dist/
 frontend/.angular/
 
+# Rust / Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
 # Editors / OS
 .vscode/
 .idea/

@@ -205,3 +205,20 @@ def get_stem_file(track_id: str, stem_name: str):
     if path is None or not path.exists():
         raise HTTPException(404, "stem file not found")
     return FileResponse(path, media_type="audio/flac")
+
+
+# --- built frontend (SPA) ---
+# Registered last so it never shadows the /api routes above. Serves the compiled
+# Angular app from FRONTEND_DIST, falling back to index.html for client-side
+# routes (e.g. /capture, /library, /player). This lets the Tauri desktop window
+# (and any browser) load the whole app from this single origin.
+@app.get("/{full_path:path}")
+def serve_frontend(full_path: str):
+    root = config.FRONTEND_DIST
+    index = root / "index.html"
+    if not index.exists():
+        raise HTTPException(404, "frontend not built (run: npm run build)")
+    candidate = (root / full_path).resolve()
+    if full_path and candidate.is_file() and root.resolve() in candidate.parents:
+        return FileResponse(candidate)
+    return FileResponse(index)

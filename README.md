@@ -33,27 +33,28 @@ browser playback mixer.
 Each person runs their own copy — recording captures *your* Spotify on *your* machine,
 so there's nothing to host or share. On a fresh **Windows** PC:
 
-**What you need first (one-time):**
-1. **Python 3.13** — https://www.python.org/downloads/ (tick *“Add Python to PATH”*).
-2. **Node.js (LTS)** — https://nodejs.org/.
-3. **VB-CABLE** — https://vb-audio.com/Cable/ → install as admin, **reboot**. Then set
-   Spotify’s output device to **CABLE Input** (Windows → Settings → System → Sound →
-   Volume mixer → Spotify). The app records from **CABLE Output**.
-4. **Spotify Premium** (required — the app starts/stops playback for you) and a free
+`setup.ps1` now **auto-installs Python 3.13, Node.js, and ffmpeg** for you (via `winget`,
+built into Windows), so you only have to handle the two things that can't be automated:
+
+1. **VB-CABLE** — https://vb-audio.com/Cable/ → install as admin, **reboot** (it's a
+   driver, so this one is manual). Then set Spotify’s output device to **CABLE Input**
+   (Windows → Settings → System → Sound → Volume mixer → Spotify). The app records from
+   **CABLE Output**.
+2. **Spotify Premium** (required — the app starts/stops playback for you) and a free
    **Spotify Developer app**:
    - https://developer.spotify.com/dashboard → *Create app*.
    - Add Redirect URI **exactly**: `http://127.0.0.1:8000/api/spotify/callback`
    - Copy the **Client ID** and **Client Secret** for the next step.
-5. *(Optional)* **ffmpeg** (https://www.gyan.dev/ffmpeg/builds/) — only needed to import
-   your own recorded takes as extra stems.
 
 **Then, in the project folder (PowerShell):**
 ```powershell
 .\setup.ps1
 ```
-This creates the Python environment and installs everything. It **auto-detects your
-GPU**: with an NVIDIA card, separation takes seconds–a minute per song; without one it
-falls back to CPU and takes a few minutes per song (still works).
+This installs any missing prerequisites, creates the Python environment, and installs
+everything. It **auto-detects your GPU**: with an NVIDIA card, separation takes seconds–a
+minute per song; without one it falls back to CPU and takes a few minutes per song (still
+works). (If a tool was just installed and isn't found yet, open a **new** terminal and
+re-run — Windows only adds it to PATH for new shells.)
 
 Open `backend\.env` and paste your Spotify Client ID/Secret:
 ```
@@ -126,6 +127,43 @@ ng serve                            # http://localhost:4200  (proxies /api to ba
 
 Open **http://localhost:4200**.
 
+## Desktop app (Tauri)
+
+The app can also run as a **native desktop window** instead of a browser tab, using
+[Tauri](https://tauri.app) (a lightweight Electron alternative: the OS webview + a small
+Rust shell, no bundled Chromium). The Rust shell provisions the app on first launch,
+starts the Python backend itself, and shuts it down when you close the window — so it's
+a single app, nothing else to manage.
+
+How it's wired: the **backend serves the built Angular app** on its own origin
+(`http://127.0.0.1:8000`), and the desktop window just points at it. That keeps every
+`/api` call and the Spotify OAuth redirect same-origin, so no frontend code changes.
+
+**Run it (that's it):**
+```powershell
+.\desktop.ps1
+```
+**Almost everything is automatic.** `desktop.ps1` installs Rust + the Tauri CLI if
+missing; then, on first launch, the window runs `setup.ps1` (which installs Python / Node
+/ ffmpeg as needed and the GPU-aware PyTorch + deps — ~2-3 GB, several minutes) and builds
+the UI, all behind a loading screen. The first launch also compiles the Rust shell; later
+runs are fast. Backend logs go to `backend/data/desktop-backend.log`.
+
+The only things that can't be automated are the same two as above: **VB-CABLE** (a
+driver — admin install + reboot) and your **Spotify credentials** in `backend\.env`
+(setup creates the file from the example for you to fill in). Windows also needs the MSVC
+C++ build tools (come with Visual Studio) to compile the Rust shell; WebView2 ships with
+Windows 11.
+
+**Build a distributable installer** (`.msi` / `.exe`) instead of running in dev:
+```powershell
+cd src-tauri
+cargo tauri build
+```
+> Note: the bundled app still runs the Python backend from this repo on the build
+> machine — packaging Python itself into the installer for a clean other-PC install is a
+> separate, larger step (not done yet).
+
 ## Using it
 1. **Capture** tab → Connect Spotify → Start capturing.
 2. Play music on Spotify (output = CABLE Input). Each finished song is auto-named,
@@ -140,4 +178,4 @@ Open **http://localhost:4200**.
 ## Notes / limits (v1)
 - Guitar/piano separation is the messiest (expect some bleed); vocal removal is clean.
 - Capture stores songs caught near their start; joining a song late is skipped.
-- Stretch ideas: per-stem spectrogram view, Tauri desktop wrapper, section looping.
+- Stretch ideas: per-stem spectrogram view, section looping. *(Tauri desktop wrapper: done — see “Desktop app” above.)*
