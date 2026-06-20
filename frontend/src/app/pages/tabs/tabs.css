@@ -51,11 +51,8 @@
 .chip.on { background: #1db954; color: #04140a; border-color: #1db954; font-weight: 600; }
 .chip.focus.on { background: #f0c674; color: #1a1408; border-color: #f0c674; }
 
-/* Our own constant-glide playhead (positioned in JS); hide alphaTab's jumpy beat cursor. */
-.playhead {
-  position: absolute; width: 2px; background: #1db954; box-shadow: 0 0 6px rgba(29,185,84,0.8);
-  pointer-events: none; display: none; z-index: 5; will-change: left, top;
-}
+/* alphaTab's own cursor: highlight the current bar + the current notes (fed warped time so it
+   tracks the recording). The thin per-beat cursor line stays hidden — the highlight reads better. */
 ::ng-deep .at-cursor-bar { background: rgba(29, 185, 84, 0.10); }
 ::ng-deep .at-cursor-beat { display: none; }
 ::ng-deep .at-highlight * { fill: #1db954; stroke: #1db954; }

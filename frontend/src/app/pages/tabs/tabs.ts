@@ -20,8 +20,6 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
 
   private atHost = viewChild<ElementRef<HTMLDivElement>>('atHost');
   private scrollHost = viewChild.required<ElementRef<HTMLDivElement>>('scrollHost');
-  private playhead = viewChild.required<ElementRef<HTMLDivElement>>('playhead');
-  private barBounds: { x: number; y: number; w: number; h: number }[] = [];
 
   song = signal<SongDetail | null>(null);
   tabs = signal<Tab[]>([]);
@@ -128,8 +126,6 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
       },
     });
     this.attachExternalMedia();
-    // Recapture bar positions whenever the score (re)lays out, for the gliding playhead.
-    (this.at as any).renderFinished?.on?.(() => this.captureBarBounds());
   }
 
   /** Bars per line from the SCORE CONTAINER's real width (not the window — the score area is
@@ -177,8 +173,9 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     cancelAnimationFrame(this.raf);
     const output = this.at?.player?.output as any;
     if (output && this.mix.isPlaying) {
-      output.updatePosition(this.mix.position() * 1000);  // drives alphaTab's bar highlight
-      this.updatePlayhead();
+      // Feed alphaTab the NOTATED time (inverse-warped from the recording position) so its bar
+      // highlight + autoscroll track the actual recording instead of drifting at the notated tempo.
+      output.updatePosition(this.audioToNotated(this.mix.position()) * 1000);
       this.autoScroll();
       this.raf = requestAnimationFrame(this.loop);
     } else {
@@ -186,34 +183,23 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     }
   };
 
-  /** Bar rectangles from alphaTab's layout, in order — one per measure. */
-  private captureBarBounds() {
-    const lookup: any = (this.at as any)?.renderer?.boundsLookup;
-    const out: { x: number; y: number; w: number; h: number }[] = [];
-    for (const sys of lookup?.staffSystems ?? []) {
-      for (const bar of sys.bars ?? []) {
-        const b = bar.realBounds ?? bar.visualBounds;
-        if (b) out.push({ x: b.x, y: b.y, w: b.w, h: b.h });
+  /** Map a recording time (s) to the tab's notated time (s) via the sync warp anchors, so
+   *  alphaTab's own cursor/bar-highlight follows the recording. Identity when no warp exists. */
+  private audioToNotated(audioSec: number): number {
+    const anchors = this.selected()?.timing?.anchors;
+    if (!anchors || anchors.length < 2) return audioSec;
+    if (audioSec <= anchors[0][1]) return anchors[0][0];
+    const last = anchors[anchors.length - 1];
+    if (audioSec >= last[1]) return last[0];
+    for (let k = 1; k < anchors.length; k++) {
+      const [n0, a0] = anchors[k - 1];
+      const [n1, a1] = anchors[k];
+      if (audioSec <= a1) {
+        const f = a1 > a0 ? (audioSec - a0) / (a1 - a0) : 0;
+        return n0 + f * (n1 - n0);
       }
     }
-    this.barBounds = out;
-    this.updatePlayhead();
-  }
-
-  /** Glide the playhead linearly across the bars by audio progress (constant pace, no jumps). */
-  private updatePlayhead() {
-    const ph = this.playhead().nativeElement;
-    const host = this.atHost()?.nativeElement;
-    const bars = this.barBounds;
-    const dur = this.mix.duration;
-    if (!host || !bars.length || dur <= 0) { ph.style.display = 'none'; return; }
-    const f = Math.max(0, Math.min(this.mix.position() / dur, 0.999999)) * bars.length;
-    const idx = Math.min(Math.floor(f), bars.length - 1);
-    const bar = bars[idx];
-    ph.style.left = `${host.offsetLeft + bar.x + (f - idx) * bar.w}px`;
-    ph.style.top = `${host.offsetTop + bar.y}px`;
-    ph.style.height = `${bar.h}px`;
-    ph.style.display = 'block';
+    return last[0];
   }
 
   private autoScroll() {

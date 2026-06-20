@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS tabs (
     alphatex   TEXT,                       -- the transcription (filled when status='done')
     status     TEXT NOT NULL DEFAULT 'pending',  -- pending | done | error
     error      TEXT,
+    timing     TEXT,                        -- JSON warp (notated<->audio anchors), filled by tabsync
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tabs_track ON tabs(track_id);
@@ -72,6 +73,9 @@ def init_db() -> None:
             if col not in cols:
                 conn.execute(
                     f"ALTER TABLE stems ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+        tab_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tabs)")}
+        if "timing" not in tab_cols:
+            conn.execute("ALTER TABLE tabs ADD COLUMN timing TEXT")
 
 
 # --- songs ---
@@ -189,6 +193,12 @@ def set_tab_result(tab_id: int, *, alphatex: Optional[str] = None,
     with get_conn() as conn:
         conn.execute("UPDATE tabs SET alphatex=?, status=?, error=? WHERE id=?",
                      (alphatex, status, error, tab_id))
+
+
+def set_tab_timing(tab_id: int, timing_json: str) -> None:
+    """Store the tabsync warp (JSON) for a tab; computed in the background after generation."""
+    with get_conn() as conn:
+        conn.execute("UPDATE tabs SET timing=? WHERE id=?", (timing_json, tab_id))
 
 
 def get_tab(tab_id: int) -> Optional[dict]:

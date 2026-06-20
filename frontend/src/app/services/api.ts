@@ -69,6 +69,12 @@ export interface NowPlaying {
 }
 export interface Jobs { current: string | null; queued: string[]; }
 
+export interface TabTiming {
+  version: number;
+  anchors: [number, number][];   // [notated_s, audio_s] confident matches
+  bar_times: number[];           // audio start time (s) per bar, in render order
+  missing: { t: number; pitches: number[] }[];  // Phase 2 cross-check
+}
 export interface Tab {
   id: number;
   track_id: string;
@@ -78,6 +84,7 @@ export interface Tab {
   status: 'pending' | 'done' | 'error';
   error: string | null;
   alphatex: string | null;
+  timing: TabTiming | null;      // tabsync warp; null until computed in the background
   created_at: number;
 }
 

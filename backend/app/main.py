@@ -176,11 +176,15 @@ def get_jobs() -> dict:
 
 # --- tabs (added manually, generated from a webpage URL via the image-tabs library) ---
 def _tab_dict(row: dict) -> dict:
+    import json
+
+    raw = row.get("timing") if isinstance(row, dict) else row["timing"]
     return {
         "id": row["id"], "track_id": row["track_id"], "stem_id": row["stem_id"],
         "name": row["name"], "source_url": row["source_url"],
         "status": row["status"], "error": row["error"],
         "alphatex": row["alphatex"], "created_at": row["created_at"],
+        "timing": json.loads(raw) if raw else None,  # tabsync warp (anchors); null until computed
     }
 
 
@@ -214,6 +218,16 @@ def get_tab(tab_id: int) -> dict:
     if tab is None:
         raise HTTPException(404, "tab not found")
     return _tab_dict(tab)
+
+
+@app.post("/api/tabs/{tab_id}/sync")
+def sync_tab(tab_id: int) -> dict:
+    """Recompute a tab's timing warp in the background (basic-pitch + DTW against its stem)."""
+    tab = db.get_tab(tab_id)
+    if tab is None:
+        raise HTTPException(404, "tab not found")
+    tabgen.start_sync(tab_id)
+    return {"ok": True}
 
 
 @app.delete("/api/tabs/{tab_id}")
