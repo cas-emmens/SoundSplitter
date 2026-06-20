@@ -201,6 +201,13 @@ def set_tab_timing(tab_id: int, timing_json: str) -> None:
         conn.execute("UPDATE tabs SET timing=? WHERE id=?", (timing_json, tab_id))
 
 
+def update_tab_alphatex(tab_id: int, alphatex: str) -> None:
+    """Persist a user-edited tab transcription (from the editor); keeps status 'done'."""
+    with get_conn() as conn:
+        conn.execute("UPDATE tabs SET alphatex=?, status='done', error=NULL WHERE id=?",
+                     (alphatex, tab_id))
+
+
 def get_tab(tab_id: int) -> Optional[dict]:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM tabs WHERE id=?", (tab_id,)).fetchone()

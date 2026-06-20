@@ -15,6 +15,19 @@
 .toolbar .sep { width: 1px; height: 20px; background: #3a3a44; margin: 0 0.25rem; }
 .toolbar button.danger { color: #f08c8c; border-color: #5a3a3a; }
 .toolbar button.danger:hover:not(:disabled) { background: #3a2a2a; border-color: #7a4a4a; }
+.toolbar button.primary { background: #1db954; color: #04140a; border-color: #1db954; font-weight: 600; }
+.toolbar button.primary:hover:not(:disabled) { background: #1ed760; }
+
+/* alphaTex source editor (shown in edit mode) */
+.editor { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.25rem; }
+.editor-hint { color: #9aa; font-size: 0.82rem; }
+.editor-hint code { background: #2a2a32; color: #cde; padding: 0 0.25rem; border-radius: 3px; }
+.editor .tex {
+  width: 100%; min-height: 220px; resize: vertical; box-sizing: border-box;
+  background: #1c1c22; color: #dfe3e8; border: 1px solid #3a3a44; border-radius: 8px;
+  padding: 0.6rem 0.8rem; font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.85rem; line-height: 1.5; tab-size: 2;
+}
 .toolbar select {
   background: #2a2a32; color: #eee; border: 1px solid #3a3a44; border-radius: 6px;
   padding: 0.35rem 0.6rem; font-size: 0.85rem; min-width: 160px;

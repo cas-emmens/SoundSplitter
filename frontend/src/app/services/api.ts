@@ -148,6 +148,9 @@ export class Api {
   getTab(tabId: number) {
     return this.http.get<Tab>(`${this.base}/tabs/${tabId}`);
   }
+  updateTab(tabId: number, alphatex: string) {
+    return this.http.patch<Tab>(`${this.base}/tabs/${tabId}`, { alphatex });
+  }
   deleteTab(tabId: number) {
     return this.http.delete<{ ok: boolean }>(`${this.base}/tabs/${tabId}`);
   }

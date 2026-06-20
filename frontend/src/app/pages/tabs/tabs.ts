@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, computed, effect, inject, signal, viewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import * as alphaTab from '@coderline/alphatab';
@@ -29,6 +29,9 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   status = signal('');
   playing = signal(false);
   mixerReady = signal(false);
+  editing = signal(false);
+  draft = signal('');       // editable alphaTex while in edit mode
+  saving = signal(false);
   trackId = '';
 
   private at?: alphaTab.AlphaTabApi;
@@ -98,12 +101,14 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     // The effect re-renders when `selected()` changes — no direct render call needed here.
   }
 
-  /** Render the currently-selected tab — no-op until both alphaTab and a tab are ready. */
+  /** Render the selected tab — or the live draft while editing. No-op until alphaTab + a tab are
+   *  ready. `draft` is read untracked so the effect doesn't re-render on every keystroke (the
+   *  editor debounces its own live preview); the effect still re-fires on selection/edit toggle. */
   private renderSelected() {
-    const tab = this.selected();
-    if (!this.at || !tab?.alphatex) return;
+    const src = this.editing() ? untracked(() => this.draft()) : this.selected()?.alphatex;
+    if (!this.at || !src) return;
     try {
-      this.at.tex(tab.alphatex);
+      this.at.tex(src);
       // Re-apply layout once the host has its real width (it may be mid-layout on first paint):
       // recomputes bars-per-row from the container width and re-renders, so bars aren't tiny.
       requestAnimationFrame(() => this.applyLayout());
@@ -111,6 +116,37 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     } catch {
       this.status.set('Could not render this tab.');
     }
+  }
+
+  // --- editor ---
+  startEdit() {
+    this.draft.set(this.selected()?.alphatex ?? '');
+    this.editing.set(true);  // the effect re-renders from the draft
+  }
+  cancelEdit() {
+    this.editing.set(false);  // the effect re-renders the saved tab
+  }
+  private editTimer = 0;
+  onDraft(value: string) {
+    this.draft.set(value);
+    // Debounced live preview: re-render the draft a beat after typing stops.
+    clearTimeout(this.editTimer);
+    this.editTimer = window.setTimeout(() => this.renderSelected(), 400);
+  }
+  saveEdit() {
+    const id = this.selectedId();
+    if (id == null) return;
+    const alphatex = this.draft();
+    this.saving.set(true);
+    this.api.updateTab(id, alphatex).subscribe({
+      next: (updated) => {
+        this.tabs.update((ts) =>
+          ts.map((t) => (t.id === id ? { ...t, alphatex: updated.alphatex, timing: updated.timing } : t)));
+        this.saving.set(false);
+        this.editing.set(false);
+      },
+      error: () => { this.saving.set(false); this.status.set('Save failed.'); },
+    });
   }
 
   private ensureAlphaTab(host: HTMLDivElement) {

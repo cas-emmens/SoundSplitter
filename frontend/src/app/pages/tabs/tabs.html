@@ -10,10 +10,17 @@
       <select [ngModel]="selectedId()" (ngModelChange)="selectTab($event)">
         @for (t of tabs(); track t.id) { <option [ngValue]="t.id">{{ t.name }}</option> }
       </select>
-      <button class="danger" (click)="deleteTab()" [disabled]="selectedId() == null" title="Delete this tab">🗑 Delete</button>
+      <button class="danger" (click)="deleteTab()" [disabled]="selectedId() == null || editing()" title="Delete this tab">🗑 Delete</button>
       <span class="sep"></span>
-      <button (click)="togglePlay()" [disabled]="!mixerReady()">{{ playing() ? '⏸ Pause' : '▶ Play' }}</button>
-      <button (click)="stop()">⏹ Stop</button>
+      @if (!editing()) {
+        <button (click)="togglePlay()" [disabled]="!mixerReady()">{{ playing() ? '⏸ Pause' : '▶ Play' }}</button>
+        <button (click)="stop()">⏹ Stop</button>
+        <span class="sep"></span>
+        <button (click)="startEdit()" [disabled]="selectedId() == null" title="Edit this tab's notes">✎ Edit</button>
+      } @else {
+        <button class="primary" (click)="saveEdit()" [disabled]="saving()">{{ saving() ? 'Saving…' : '💾 Save' }}</button>
+        <button (click)="cancelEdit()" [disabled]="saving()">Cancel</button>
+      }
     </div>
 
     @if (status()) { <p class="status">{{ status() }}</p> }
@@ -42,6 +49,18 @@
         @if (!stems().length) { <span class="muted">No stems for this song.</span> }
       </aside>
     </div>
+
+    @if (editing()) {
+      <div class="editor">
+        <div class="editor-hint">
+          Edit the tab below — the preview above updates as you type. Format:
+          <code>fret.string</code> (string 1 = high E), chord <code>(5.3 7.1)</code>,
+          duration <code>:8</code>, rest <code>r</code>, bar <code>|</code>.
+        </div>
+        <textarea class="tex" spellcheck="false" [value]="draft()"
+          (input)="onDraft($any($event.target).value)"></textarea>
+      </div>
+    }
   } @else {
     <p class="hint">No tabs yet. On the player page, use <strong>Add tab</strong>, paste the URL of a
       tab webpage (e.g. Songsterr), and it’ll be transcribed and show up here.</p>

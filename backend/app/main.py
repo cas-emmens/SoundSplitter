@@ -220,6 +220,19 @@ def get_tab(tab_id: int) -> dict:
     return _tab_dict(tab)
 
 
+@app.patch("/api/tabs/{tab_id}")
+def update_tab(tab_id: int, payload: dict) -> dict:
+    """Save an edited tab transcription from the editor, then re-sync its timing in the background."""
+    if db.get_tab(tab_id) is None:
+        raise HTTPException(404, "tab not found")
+    alphatex = payload.get("alphatex")
+    if not isinstance(alphatex, str) or not alphatex.strip():
+        raise HTTPException(400, "alphatex is required")
+    db.update_tab_alphatex(tab_id, alphatex)
+    tabgen.start_sync(tab_id)  # the warp depends on the notes, so recompute it
+    return _tab_dict(db.get_tab(tab_id))
+
+
 @app.post("/api/tabs/{tab_id}/sync")
 def sync_tab(tab_id: int) -> dict:
     """Recompute a tab's timing warp in the background (basic-pitch + DTW against its stem)."""
