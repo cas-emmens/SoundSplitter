@@ -52,6 +52,18 @@
 
     @if (editing()) {
       <div class="editor">
+        @if (hints().length) {
+          <div class="hints">
+            <span class="hints-title">🎧 Audio suggests {{ hints().length }} possible missing note(s):</span>
+            @for (h of hints(); track h.i) {
+              <span class="hint-chip">
+                bar {{ h.bar }}: <b>{{ h.label }}</b>
+                <button class="apply" (click)="applyHint(h)" title="Insert {{ h.token }} into bar {{ h.bar }}">+ {{ h.token }}</button>
+                <button class="dismiss" (click)="dismissHint(h.i)" title="Dismiss">×</button>
+              </span>
+            }
+          </div>
+        }
         <div class="editor-hint">
           Edit the tab below — the preview above updates as you type. Format:
           <code>fret.string</code> (string 1 = high E), chord <code>(5.3 7.1)</code>,

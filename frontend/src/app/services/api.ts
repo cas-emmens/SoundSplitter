@@ -73,7 +73,7 @@ export interface TabTiming {
   version: number;
   anchors: [number, number][];   // [notated_s, audio_s] confident matches
   bar_times: number[];           // audio start time (s) per bar, in render order
-  missing: { t: number; pitches: number[] }[];  // Phase 2 cross-check
+  missing: { bar: number; midi: number[]; t: number; amp: number }[];  // audio cross-check hints
 }
 export interface Tab {
   id: number;

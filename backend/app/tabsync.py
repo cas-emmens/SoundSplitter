@@ -487,17 +487,18 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
     }
 
 
-def _candidate_missing(beats: list[Beat], res: AlignResult, *, min_amp: float = 0.5,
-                      active_window: float = 1.0, dedup_window: float = 0.4) -> list[dict]:
-    """Filter raw unmatched audio groups down to likely *missing tab notes*.
+def _candidate_missing(beats: list[Beat], res: AlignResult, *, min_amp: float = 0.6,
+                      active_window: float = 0.5, dedup_window: float = 0.4) -> list[dict]:
+    """Filter raw unmatched audio groups down to *high-precision* missing-note hints.
 
-    The raw cross-check is noisy (basic-pitch artifacts, harmonics, bleed, and audio during
-    sections this part rests). We keep a group only if it is (a) loud enough (`min_amp`), (b) in
-    an *active* passage — within `active_window`s of a confidently-matched beat, not a long rest —
-    and (c) carries a pitch that is *new* to its bar: not at-or-above an octave of a note already
-    there (which would be a duplicate or an upper harmonic). Lower-octave notes are kept, since the
-    dropped notes are mostly thumb-bass. Ringing re-detections (same pitch-class within
-    `dedup_window`s) are collapsed. Each survivor is mapped to the bar it belongs in via the warp.
+    The raw cross-check is noisy (basic-pitch artifacts, harmonics, bleed, alignment drift), so
+    surfacing it raw wastes the user's time. We keep a group only if it is (a) loud (``min_amp``),
+    (b) close (``active_window``) to a confidently-matched beat — i.e. in a reliably-aligned spot,
+    not a drift region (the window is tight but small enough that the song-opening thumb note,
+    whose first match is ~0.3s in, still survives), and (c) carries a pitch *new* to its bar (not
+    at-or-above an octave of a note already there — a duplicate or upper harmonic; lower-octave
+    bass is kept). Ringing repeats and same-bar octave harmonics are then collapsed (keep the
+    lowest octave). Favours precision over recall: a few trustworthy flags, not a noisy list.
     """
     import bisect
 
@@ -517,7 +518,7 @@ def _candidate_missing(beats: list[Beat], res: AlignResult, *, min_amp: float = 
     for b in beats:
         bar_notes.setdefault(b.bar, set()).update(b.pitches)
 
-    out: list[dict] = []
+    raw: list[dict] = []
     last_t, last_pc = -1e9, -1
     for g in sorted(res.missing, key=lambda g: g.time):
         if g.amp < min_amp or gap(g.time) > active_window:
@@ -529,10 +530,22 @@ def _candidate_missing(beats: list[Beat], res: AlignResult, *, min_amp: float = 
         )
         if not novel:
             continue
-        if out and g.time - last_t < dedup_window and novel[0] % 12 == last_pc:
+        if raw and g.time - last_t < dedup_window and novel[0] % 12 == last_pc:
             continue
-        out.append({"bar": bar, "midi": novel, "t": round(g.time, 3), "amp": round(g.amp, 2)})
+        raw.append({"bar": bar, "midi": novel, "t": round(g.time, 3), "amp": round(g.amp, 2)})
         last_t, last_pc = g.time, novel[0] % 12
+
+    # Per-bar octave dedup: drop a flagged pitch if a LOWER octave of the same pitch-class is also
+    # flagged in that bar (it's the upper harmonic of the real, lower note).
+    by_bar: dict[int, list[int]] = {}
+    for c in raw:
+        by_bar.setdefault(c["bar"], []).extend(c["midi"])
+    out: list[dict] = []
+    for c in raw:
+        kept = [p for p in c["midi"]
+                if not any((p - q) % 12 == 0 and q < p for q in by_bar[c["bar"]])]
+        if kept:
+            out.append({**c, "midi": kept})
     return out
 
 

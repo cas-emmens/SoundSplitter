@@ -118,9 +118,58 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  // --- audio cross-check hints ---
+  private dismissed = signal<Set<number>>(new Set());
+  /** High-precision missing-note flags from the audio cross-check, formatted for the editor. */
+  hints = computed(() => {
+    const miss = this.selected()?.timing?.missing ?? [];
+    const dis = this.dismissed();
+    return miss
+      .map((m, i) => ({
+        i,
+        bar: m.bar + 1,  // display 1-based to match the printed bar numbers
+        label: m.midi.map((p) => this.noteName(p)).join('+'),
+        token: this.midiToFret(m.midi[0]),
+        rawBar: m.bar,
+      }))
+      .filter((h) => !dis.has(h.i));
+  });
+  private noteName(midi: number) {
+    const N = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    return `${N[midi % 12]}${Math.floor(midi / 12) - 1}`;
+  }
+  /** Best-guess fret.string for a pitch (lowest fret ≤15); the user can adjust in the text. */
+  private midiToFret(midi: number) {
+    const open = [0, 64, 59, 55, 50, 45, 40];  // index = string number (1..6)
+    let best: { s: number; f: number } | null = null;
+    for (let s = 1; s <= 6; s++) {
+      const f = midi - open[s];
+      if (f >= 0 && f <= 15 && (best === null || f < best.f)) best = { s, f };
+    }
+    return best ? `${best.f}.${best.s}` : '';
+  }
+  applyHint(h: { i: number; rawBar: number; token: string }) {
+    if (!h.token) return;
+    const lines = this.draft().split('\n');
+    const sep = lines.findIndex((l) => l.trim() === '.');
+    const head = sep >= 0 ? lines.slice(0, sep + 1) : [];
+    const segs = (sep >= 0 ? lines.slice(sep + 1) : lines).join('\n').split('|');
+    const idx = Math.min(Math.max(h.rawBar, 0), segs.length - 1);
+    const ts = segs[idx].match(/^(\s*\\ts\s+\d+\s+\d+\s+)/);  // keep a leading time signature first
+    segs[idx] = ts
+      ? ts[1] + h.token + ' ' + segs[idx].slice(ts[1].length)
+      : segs[idx].replace(/^(\s*)/, `$1${h.token} `);
+    this.onDraft([...head, segs.join('|')].join('\n'));
+    this.dismissHint(h.i);
+  }
+  dismissHint(i: number) {
+    this.dismissed.update((s) => new Set(s).add(i));
+  }
+
   // --- editor ---
   startEdit() {
     this.draft.set(this.selected()?.alphatex ?? '');
+    this.dismissed.set(new Set());
     this.editing.set(true);  // the effect re-renders from the draft
   }
   cancelEdit() {
