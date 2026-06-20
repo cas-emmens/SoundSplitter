@@ -25,54 +25,54 @@
 
     @if (status()) { <p class="status">{{ status() }}</p> }
 
-    <div class="tab-body">
+    <div class="tab-body" [class.is-editing]="editing()">
       <div #scrollHost class="score-scroll">
         <div #atHost class="score"></div>
       </div>
 
-      <aside class="sidecar">
-        <div class="sidecar-head">
-          <span>Stems</span>
-          <button class="link" (click)="allOn()">all on</button>
-        </div>
-        @for (s of stems(); track s.name) {
-          <div class="stem-row" [class.is-muted]="s.muted" [class.is-focused]="s.focused">
-            <span class="stem-name">{{ s.name }}</span>
-            <button class="chip" [class.on]="!s.muted" (click)="toggleMute(s.name)" title="Mute / unmute">
-              {{ s.muted ? 'muted' : 'on' }}
-            </button>
-            <button class="chip focus" [class.on]="s.focused" (click)="toggleFocus(s.name)" title="Focus this stem (solo)">
-              focus
-            </button>
+      @if (editing()) {
+        <div class="editor">
+          @if (hints().length) {
+            <div class="hints">
+              <span class="hints-title">🎧 Audio suggests {{ hints().length }} missing note(s):</span>
+              @for (h of hints(); track h.i) {
+                <span class="hint-chip">
+                  bar {{ h.bar }}: <b>{{ h.label }}</b>
+                  <button class="apply" (click)="applyHint(h)" title="Insert {{ h.token }} into bar {{ h.bar }}">+ {{ h.token }}</button>
+                  <button class="dismiss" (click)="dismissHint(h.i)" title="Dismiss">×</button>
+                </span>
+              }
+            </div>
+          }
+          <div class="editor-hint">
+            Edit the tab — the preview updates as you type. <code>fret.string</code> (string 1 =
+            high E), chord <code>(5.3 7.1)</code>, duration <code>:8</code>, rest <code>r</code>,
+            bar <code>|</code>.
           </div>
-        }
-        @if (!stems().length) { <span class="muted">No stems for this song.</span> }
-      </aside>
+          <textarea class="tex" spellcheck="false" [value]="draft()"
+            (input)="onDraft($any($event.target).value)"></textarea>
+        </div>
+      } @else {
+        <aside class="sidecar">
+          <div class="sidecar-head">
+            <span>Stems</span>
+            <button class="link" (click)="allOn()">all on</button>
+          </div>
+          @for (s of stems(); track s.name) {
+            <div class="stem-row" [class.is-muted]="s.muted" [class.is-focused]="s.focused">
+              <span class="stem-name">{{ s.name }}</span>
+              <button class="chip" [class.on]="!s.muted" (click)="toggleMute(s.name)" title="Mute / unmute">
+                {{ s.muted ? 'muted' : 'on' }}
+              </button>
+              <button class="chip focus" [class.on]="s.focused" (click)="toggleFocus(s.name)" title="Focus this stem (solo)">
+                focus
+              </button>
+            </div>
+          }
+          @if (!stems().length) { <span class="muted">No stems for this song.</span> }
+        </aside>
+      }
     </div>
-
-    @if (editing()) {
-      <div class="editor">
-        @if (hints().length) {
-          <div class="hints">
-            <span class="hints-title">🎧 Audio suggests {{ hints().length }} possible missing note(s):</span>
-            @for (h of hints(); track h.i) {
-              <span class="hint-chip">
-                bar {{ h.bar }}: <b>{{ h.label }}</b>
-                <button class="apply" (click)="applyHint(h)" title="Insert {{ h.token }} into bar {{ h.bar }}">+ {{ h.token }}</button>
-                <button class="dismiss" (click)="dismissHint(h.i)" title="Dismiss">×</button>
-              </span>
-            }
-          </div>
-        }
-        <div class="editor-hint">
-          Edit the tab below — the preview above updates as you type. Format:
-          <code>fret.string</code> (string 1 = high E), chord <code>(5.3 7.1)</code>,
-          duration <code>:8</code>, rest <code>r</code>, bar <code>|</code>.
-        </div>
-        <textarea class="tex" spellcheck="false" [value]="draft()"
-          (input)="onDraft($any($event.target).value)"></textarea>
-      </div>
-    }
   } @else {
     <p class="hint">No tabs yet. On the player page, use <strong>Add tab</strong>, paste the URL of a
       tab webpage (e.g. Songsterr), and it’ll be transcribed and show up here.</p>
