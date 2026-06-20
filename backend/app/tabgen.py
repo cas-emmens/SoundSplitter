@@ -12,6 +12,16 @@ import traceback
 
 from . import db
 
+# Serialize timing syncs per stem: importing several parts at once fires concurrent syncs that
+# would otherwise race on the shared master alignment and leave inconsistent warps.
+_stem_sync_locks: dict[int, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def _stem_lock(stem_id: int) -> threading.Lock:
+    with _locks_guard:
+        return _stem_sync_locks.setdefault(stem_id, threading.Lock())
+
 
 def _ensure_tesseract() -> None:
     """Point image-tabs at a Tesseract binary if the environment hasn't already.
@@ -44,25 +54,36 @@ def _run(tab_id: int, url: str, title: str) -> None:
 
 
 def sync_timing(tab_id: int) -> None:
-    """Align a done tab to its coupled guitar stem and store the warp (best-effort).
+    """Align the stem's parts to the recording and store each one's warp (best-effort).
 
-    Runs basic-pitch on the stem (cached per stem) + DTW alignment. Timing is optional, so any
-    failure is logged and swallowed — the tab still works, the cursor just falls back to the
-    notated tempo until a warp exists.
+    A guitar stem often carries several parts panned differently (acoustic left, 12-string right).
+    We align every done tab on the stem and **competitively** assign each its pan side, so each
+    part aligns against the azimuth-isolated audio it actually lives in (a follower part can't
+    steal the louder part's side). basic-pitch is cached per stem/side; runs under a per-stem lock
+    so concurrent imports don't race. Timing is optional — failures are logged and swallowed.
     """
     try:
         import json
 
         tab = db.get_tab(tab_id)
-        if not tab or not tab.get("stem_id") or not tab.get("alphatex"):
+        if not tab or not tab.get("stem_id"):
             return
         stem = db.get_stem(tab["stem_id"])
         if not stem:
             return
-        from .tabsync import compute_timing
+        from .tabsync import compute_timings_competitive
 
-        timing = compute_timing(stem["path"], tab["alphatex"])
-        db.set_tab_timing(tab_id, json.dumps(timing))
+        with _stem_lock(tab["stem_id"]):
+            siblings = [
+                t for t in db.get_tabs(tab["track_id"])
+                if t.get("stem_id") == tab["stem_id"]
+                and t.get("status") == "done" and t.get("alphatex")
+            ]
+            if not siblings:
+                return
+            timings = compute_timings_competitive(stem["path"], [t["alphatex"] for t in siblings])
+            for t, timing in zip(siblings, timings):
+                db.set_tab_timing(t["id"], json.dumps(timing))
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
