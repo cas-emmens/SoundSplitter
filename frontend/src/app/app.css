@@ -10,3 +10,5 @@
 .topbar a { color: var(--muted); padding: 4px 6px; border-radius: 6px; }
 .topbar a.active { color: var(--text); background: var(--panel-2); }
 .content { max-width: 1000px; margin: 0 auto; padding: 24px 22px; }
+/* The tabs page uses a wide canvas so the score fills large screens instead of a narrow column. */
+.content.wide { max-width: min(1900px, calc(100vw - 48px)); }

@@ -134,11 +134,12 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
 
   /** Bars per line from the SCORE CONTAINER's real width (not the window — the score area is
    *  much narrower than the window because of the page layout + stem sidebar). ~320px/bar reads
-   *  comfortably. Falls back to a sane default before the host has been laid out (width 0). */
+   *  comfortably. Capped at 4: songs are usually 4-bar phrases, so a 4-bar row reads far better
+   *  than 5 even when there's room for more. Falls back to a sane default before layout (width 0). */
   private barsPerRow() {
     const w = this.atHost()?.nativeElement.clientWidth ?? 0;
-    if (w < 100) return 3;
-    return Math.max(1, Math.min(6, Math.round(w / 320)));
+    if (w < 100) return 4;
+    return Math.max(1, Math.min(4, Math.round(w / 320)));
   }
 
   private applyLayout() {

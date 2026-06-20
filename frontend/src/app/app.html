@@ -3,6 +3,6 @@
   <a routerLink="/library" routerLinkActive="active">Library</a>
   <a routerLink="/capture" routerLinkActive="active">Capture</a>
 </nav>
-<main class="content">
+<main class="content" [class.wide]="wide()">
   <router-outlet />
 </main>
