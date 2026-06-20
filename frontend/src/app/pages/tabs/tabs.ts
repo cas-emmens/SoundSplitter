@@ -106,8 +106,9 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     if (!this.at || !tab?.alphatex) return;
     try {
       this.at.tex(tab.alphatex);
-      // Re-render once after layout so the first paint isn't blank (host may be mid-layout).
-      requestAnimationFrame(() => this.at?.render());
+      // Re-apply layout once the host has its real width (it may be mid-layout on first paint):
+      // recomputes bars-per-row from the container width and re-renders, so bars aren't tiny.
+      requestAnimationFrame(() => this.applyLayout());
       this.status.set('');
     } catch {
       this.status.set('Could not render this tab.');
@@ -131,8 +132,14 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     (this.at as any).renderFinished?.on?.(() => this.captureBarBounds());
   }
 
-  /** Bars per line: 4 on wide monitors, 2 on smaller ones (so bars fill the width). */
-  private barsPerRow() { return window.innerWidth >= 1200 ? 4 : 2; }
+  /** Bars per line from the SCORE CONTAINER's real width (not the window — the score area is
+   *  much narrower than the window because of the page layout + stem sidebar). ~320px/bar reads
+   *  comfortably. Falls back to a sane default before the host has been laid out (width 0). */
+  private barsPerRow() {
+    const w = this.atHost()?.nativeElement.clientWidth ?? 0;
+    if (w < 100) return 3;
+    return Math.max(1, Math.min(6, Math.round(w / 320)));
+  }
 
   private applyLayout() {
     if (!this.at) return;
