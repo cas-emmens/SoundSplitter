@@ -10,6 +10,7 @@
       <select [ngModel]="selectedId()" (ngModelChange)="selectTab($event)">
         @for (t of tabs(); track t.id) { <option [ngValue]="t.id">{{ t.name }}</option> }
       </select>
+      <button class="danger" (click)="deleteTab()" [disabled]="selectedId() == null" title="Delete this tab">🗑 Delete</button>
       <span class="sep"></span>
       <button (click)="togglePlay()" [disabled]="!mixerReady()">{{ playing() ? '⏸ Pause' : '▶ Play' }}</button>
       <button (click)="stop()">⏹ Stop</button>

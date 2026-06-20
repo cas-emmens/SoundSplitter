@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, OnDestroy, OnInit, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import * as alphaTab from '@coderline/alphatab';
@@ -18,7 +18,7 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private mix = inject(MultitrackPlayer);
 
-  private atHost = viewChild.required<ElementRef<HTMLDivElement>>('atHost');
+  private atHost = viewChild<ElementRef<HTMLDivElement>>('atHost');
   private scrollHost = viewChild.required<ElementRef<HTMLDivElement>>('scrollHost');
   private playhead = viewChild.required<ElementRef<HTMLDivElement>>('playhead');
   private barBounds: { x: number; y: number; w: number; h: number }[] = [];
@@ -36,6 +36,21 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   private at?: alphaTab.AlphaTabApi;
   private raf = 0;
 
+  constructor() {
+    // The score host lives inside an `@if (tabs().length)` block, so it does NOT exist yet when
+    // ngAfterViewInit fires (tabs load async, after first paint). Creating alphaTab there read a
+    // required viewChild that wasn't in the DOM and threw, so the api was never built and the
+    // score stayed blank forever — no tab-switch could recover it. An effect instead runs after
+    // change detection: it builds alphaTab the moment the host appears, and re-renders whenever
+    // the selected tab changes. (Reads `atHost()` + `selected()` so it re-fires on both.)
+    effect(() => {
+      const host = this.atHost();
+      if (!host) return;
+      this.ensureAlphaTab(host.nativeElement);
+      this.renderSelected();
+    });
+  }
+
   ngOnInit() {
     this.trackId = this.route.snapshot.paramMap.get('id') || '';
     this.api.song(this.trackId).subscribe((s) => {
@@ -49,11 +64,9 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
-  // The score host only exists after the view is initialised; create alphaTab here (not in the
-  // async data callback) and render whatever is already selected, so the first paint isn't blank.
   ngAfterViewInit() {
-    this.ensureAlphaTab();
-    this.renderSelected();
+    // alphaTab creation/render is handled by the constructor effect (the host is behind an @if
+    // and isn't in the DOM yet here); we only need the resize listener for responsive bars-per-row.
     window.addEventListener('resize', this.onResize);
   }
 
@@ -84,7 +97,7 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     this.selectedId.set(id);
     this.mix.seek(0);
     this.playing.set(false);
-    this.renderSelected();
+    // The effect re-renders when `selected()` changes — no direct render call needed here.
   }
 
   /** Render the currently-selected tab — no-op until both alphaTab and a tab are ready. */
@@ -101,9 +114,9 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  private ensureAlphaTab() {
+  private ensureAlphaTab(host: HTMLDivElement) {
     if (this.at) return;
-    this.at = new alphaTab.AlphaTabApi(this.atHost().nativeElement, {
+    this.at = new alphaTab.AlphaTabApi(host, {
       core: { fontDirectory: '/alphatab/font/', useWorkers: false },
       display: { layoutMode: alphaTab.LayoutMode.Page, scale: 1.0, barsPerRow: this.barsPerRow() },
       player: {
@@ -182,10 +195,10 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   /** Glide the playhead linearly across the bars by audio progress (constant pace, no jumps). */
   private updatePlayhead() {
     const ph = this.playhead().nativeElement;
-    const host = this.atHost().nativeElement;
+    const host = this.atHost()?.nativeElement;
     const bars = this.barBounds;
     const dur = this.mix.duration;
-    if (!bars.length || dur <= 0) { ph.style.display = 'none'; return; }
+    if (!host || !bars.length || dur <= 0) { ph.style.display = 'none'; return; }
     const f = Math.max(0, Math.min(this.mix.position() / dur, 0.999999)) * bars.length;
     const idx = Math.min(Math.floor(f), bars.length - 1);
     const bar = bars[idx];
@@ -197,7 +210,7 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
 
   private autoScroll() {
     const scroller = this.scrollHost().nativeElement;
-    const cursor = this.atHost().nativeElement.querySelector('.at-cursor-bar') as HTMLElement | null;
+    const cursor = this.atHost()?.nativeElement.querySelector('.at-cursor-bar') as HTMLElement | null;
     if (!cursor) return;
     const cRect = cursor.getBoundingClientRect();
     const sRect = scroller.getBoundingClientRect();
@@ -205,6 +218,20 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     if (yInView < 0 || yInView > sRect.height * 0.75) {
       scroller.scrollTop += yInView - sRect.height * 0.30;
     }
+  }
+
+  deleteTab() {
+    const id = this.selectedId();
+    if (id == null) return;
+    const tab = this.selected();
+    if (!confirm(`Delete tab "${tab?.name ?? ''}"? You can re-add it from the player page.`)) return;
+    this.api.deleteTab(id).subscribe(() => {
+      const remaining = this.tabs().filter((t) => t.id !== id);
+      this.tabs.set(remaining);
+      // Select the next remaining tab (the effect re-renders); if none left, clear selection.
+      if (remaining.length) this.selectTab(remaining[0].id);
+      else this.selectedId.set(null);
+    });
   }
 
   togglePlay() { this.at?.playPause(); }
