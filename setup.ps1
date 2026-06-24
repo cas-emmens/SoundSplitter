@@ -26,7 +26,14 @@ function Install-Dep($id, $name) {
     }
     Step "Installing $name (winget: $id)"
     winget install --id $id -e --accept-source-agreements --accept-package-agreements --disable-interactivity
+    $code = $LASTEXITCODE
     Update-SessionPath
+    # winget returns 0 on a fresh install. -1978335189 (0x8A15002B) means "already installed / no
+    # applicable upgrade", which is fine for us. Anything else is a real failure - surface it so a
+    # silent install (e.g. a declined source agreement) doesn't masquerade as success downstream.
+    if ($code -ne 0 -and $code -ne -1978335189) {
+        throw "winget failed to install $name (exit code $code). Install $name manually, then re-run .\setup.ps1"
+    }
 }
 
 # --- prerequisites -----------------------------------------------------------
@@ -44,6 +51,21 @@ function Resolve-Python {
     if (Get-Command python -ErrorAction SilentlyContinue) {
         Warn "Using 'python' on PATH (no 'py' launcher). Make sure it's Python 3.11-3.13."
         return @("python")
+    }
+    # winget installs Python but its PATH update often isn't visible in this session (or even after
+    # re-reading the registry). Fall back to the well-known install locations so a fresh setup
+    # doesn't need a new terminal. Newest first; covers per-user and all-users (winget) installs.
+    $candidates = @()
+    foreach ($base in @("$env:LOCALAPPDATA\Programs\Python", "$env:ProgramFiles\Python", "${env:ProgramFiles(x86)}\Python")) {
+        foreach ($v in @("313", "312", "311")) {
+            $candidates += Join-Path $base "Python$v\python.exe"
+        }
+    }
+    foreach ($exe in $candidates) {
+        if (Test-Path $exe) {
+            Warn "Found Python at $exe (not yet on PATH - using it directly)."
+            return @($exe)
+        }
     }
     return $null
 }
