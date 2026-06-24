@@ -22,3 +22,6 @@ h1 { margin-top: 0; }
 .del:hover { opacity: 1; background: #3a2020; }
 .del:disabled { opacity: 0.3; cursor: default; }
 .err { color: var(--danger); font-size: 12px; margin-top: 6px; }
+
+/* Animated EQ spinner shown on the badge while a song is queued/separating. */
+.badge-spinner { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }

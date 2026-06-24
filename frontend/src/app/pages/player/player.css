@@ -70,3 +70,7 @@
   border-radius: 8px; padding: 8px 10px; font-size: 14px;
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* Animated EQ spinner next to the "Generating tab(s)…" message. */
+.pending-tabs { display: inline-flex; align-items: center; gap: 8px; }
+.inline-spinner { width: 18px; height: 18px; flex: 0 0 auto; }

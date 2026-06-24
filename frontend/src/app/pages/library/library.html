@@ -22,7 +22,12 @@
           <div class="title" [title]="s.title">{{ s.title }}</div>
           <div class="artist muted" [title]="s.artist">{{ s.artist }}</div>
           <div class="row">
-            <span class="badge" [attr.data-status]="s.status">{{ statusLabel(s) }}</span>
+            <span class="badge" [attr.data-status]="s.status">
+              @if (s.status === 'separating' || s.status === 'queued') {
+                <img class="badge-spinner" src="/loading-eq.svg" alt="" aria-hidden="true" />
+              }
+              {{ statusLabel(s) }}
+            </span>
             <span class="actions">
               @if (s.status === 'done') {
                 <a class="open" [routerLink]="['/player', s.track_id]">Open →</a>

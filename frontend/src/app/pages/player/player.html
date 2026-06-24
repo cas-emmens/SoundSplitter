@@ -18,7 +18,7 @@
   </header>
 
   @if (pendingTabs().length) {
-    <p class="muted small">Generating {{ pendingTabs().length }} tab(s) from the web — this can take a few minutes.</p>
+    <p class="muted small pending-tabs"><img class="inline-spinner" src="/loading-eq.svg" alt="" aria-hidden="true" />Generating {{ pendingTabs().length }} tab(s) from the web — this can take a few minutes.</p>
   }
   @for (t of errorTabs(); track t.id) {
     <p class="tab-err small">Tab “{{ t.name }}” failed: {{ t.error }}</p>

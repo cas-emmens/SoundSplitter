@@ -6,7 +6,7 @@
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.topbar .brand { font-weight: 600; margin-right: 8px; }
+.topbar .brand-logo { height: 28px; width: auto; display: block; margin-right: 8px; }
 .topbar a { color: var(--muted); padding: 4px 6px; border-radius: 6px; }
 .topbar a.active { color: var(--text); background: var(--panel-2); }
 .content { max-width: 1000px; margin: 0 auto; padding: 24px 22px; }
