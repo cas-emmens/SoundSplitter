@@ -15,6 +15,14 @@
 #define AppExe "sound-splitter.exe"
 ; Stable AppId so updates upgrade the same install (do not change between releases).
 #define AppId "{{9F3A6B2C-7E41-4C8B-9A2D-5E1F0B7C3D44}"
+; Which staged payload to package and the installer-name suffix. build-installer.ps1
+; passes payload-cuda / -cuda for the NVIDIA build; defaults are the CPU build.
+#ifndef PayloadDir
+  #define PayloadDir "payload"
+#endif
+#ifndef VariantSuffix
+  #define VariantSuffix ""
+#endif
 
 [Setup]
 AppId={#AppId}
@@ -40,14 +48,14 @@ RestartApplications=no
 SetupIconFile=src-tauri\icons\icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 OutputDir=dist
-OutputBaseFilename=SoundSplitter-Setup-{#AppVersion}
+OutputBaseFilename=SoundSplitter-Setup-{#AppVersion}{#VariantSuffix}
 
 [Files]
 ; The Tauri shell executable.
 Source: "src-tauri\target\release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 ; The full self-contained payload (Python runtime, Chromium, Tesseract, ffmpeg,
 ; Demucs weights, backend, built frontend). recursesubdirs pulls the whole tree.
-Source: "src-tauri\payload\*"; DestDir: "{app}\payload"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "src-tauri\{#PayloadDir}\*"; DestDir: "{app}\payload"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

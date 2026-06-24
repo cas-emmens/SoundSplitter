@@ -242,7 +242,13 @@ fn check_for_updates(handle: &AppHandle) {
     if !version_gt(&manifest.version, env!("CARGO_PKG_VERSION")) {
         return; // up to date
     }
-    let Some(entry) = manifest.platforms.get("windows-x86_64") else { return };
+    // Pick the build variant's entry so a CUDA install updates to the CUDA
+    // installer (and CPU to CPU). The variant is a marker file in the payload.
+    let key = match payload_dir(handle).and_then(|p| std::fs::read_to_string(p.join("variant")).ok()) {
+        Some(v) if v.trim() == "cuda" => "windows-x86_64-cuda",
+        _ => "windows-x86_64",
+    };
+    let Some(entry) = manifest.platforms.get(key) else { return };
 
     set_status(handle, "Downloading update…");
     let mut buf = Vec::new();
@@ -475,15 +481,21 @@ mod tests {
     /// tampering must be rejected. Skips if the signed installer isn't present.
     #[test]
     fn signature_roundtrip() {
-        let exe = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("dist")
-            .join("SoundSplitter-Setup-0.1.0.exe");
-        let sig = exe.with_extension("exe.sig");
-        if !exe.exists() || !sig.exists() {
-            eprintln!("skipping: no signed installer at {}", exe.display());
+        // Find any signed installer in dist/ (version-agnostic, cpu or cuda build).
+        let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("dist");
+        let exe = std::fs::read_dir(&dist).ok().and_then(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                name.starts_with("SoundSplitter-Setup-")
+                    && name.ends_with(".exe")
+                    && p.with_extension("exe.sig").exists()
+            })
+        });
+        let Some(exe) = exe else {
+            eprintln!("skipping: no signed installer in {}", dist.display());
             return;
-        }
+        };
+        let sig = exe.with_extension("exe.sig");
         let data = std::fs::read(&exe).unwrap();
         let signature = std::fs::read_to_string(&sig).unwrap();
         assert!(
