@@ -155,14 +155,34 @@ driver — admin install + reboot) and your **Spotify credentials** in `backend\
 C++ build tools (come with Visual Studio) to compile the Rust shell; WebView2 ships with
 Windows 11.
 
-**Build a distributable installer** (`.msi` / `.exe`) instead of running in dev:
+### Give it to a friend: self-contained installer
+
+To produce a **single installer** that works on a PC with **no Python, Node, winget, or
+internet** — everything (a relocatable Python runtime, CPU PyTorch, pre-downloaded Demucs
+weights, Playwright Chromium, Tesseract, ffmpeg, and the prebuilt UI) is bundled inside:
+
 ```powershell
-cd src-tauri
-cargo tauri build
+.\build-installer.ps1
 ```
-> Note: the bundled app still runs the Python backend from this repo on the build
-> machine — packaging Python itself into the installer for a clean other-PC install is a
-> separate, larger step (not done yet).
+
+This stages the payload, builds the shell, and packages everything with **Inno Setup** into a
+single ~630 MB `dist\SoundSplitter-Setup-<version>.exe`. (Inno, not NSIS/Tauri's bundler: the
+payload is ~2.5 GB and NSIS hard-caps installers at ~2 GB.) It installs per-user (no admin), and
+the app **auto-updates** on launch via a custom check in the Rust shell that fetches `latest.json`,
+verifies a minisign signature, and runs the new installer. See **[RELEASING.md](RELEASING.md)**
+for signing-key and publishing steps.
+
+Your friend then only needs the two things that genuinely can't be bundled:
+- **VB-CABLE** (audio driver — admin install + reboot), and
+- **Spotify credentials** — pasted into `%APPDATA%\SoundSplitter\.env` (the app seeds this
+  file on first run and shows the exact path on the loading screen).
+
+Writable state (library, DB, token, `.env`) lives in `%APPDATA%\SoundSplitter\`, so in-place
+upgrades never wipe it. Separation runs on **CPU** in the bundle (portable, but a few minutes
+per song). Requires the WebView2 runtime (ships with Windows 11).
+
+> Build prerequisites on your machine: Rust, Node, Tesseract + ffmpeg (via `setup.ps1`), and
+> **Inno Setup 6** (`winget install JRSoftware.InnoSetup`).
 
 ## Using it
 1. **Capture** tab → Connect Spotify → Start capturing.

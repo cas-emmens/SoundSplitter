@@ -28,6 +28,14 @@ frontend/.angular/
 # Rust / Tauri build artifacts
 src-tauri/target/
 src-tauri/gen/
+# Self-contained installer payload (multi-GB: bundled Python, Chromium, weights…)
+src-tauri/payload/
+# Built installer output (the .exe is ~630MB; latest.json is generated per release)
+/dist/
+# Updater signing keys — NEVER commit
+*.key
+*.key.pub
+.tauri/
 
 # Editors / OS
 .vscode/

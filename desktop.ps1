@@ -1,5 +1,5 @@
 <#
-  Launch Sound Splitter as a desktop app (Tauri).
+  Launch SoundSplitter as a desktop app (Tauri).
 
   Unlike .\run.ps1 (which opens the app in your web browser via two terminals),
   this builds/runs the native desktop window. The window provisions everything on
@@ -70,7 +70,7 @@ if (Test-Provisioned) {
     & (Join-Path $root "setup.ps1")
 }
 
-Write-Host "Launching Sound Splitter desktop app..." -ForegroundColor Cyan
+Write-Host "Launching SoundSplitter desktop app..." -ForegroundColor Cyan
 Write-Host "(First run installs dependencies and builds the UI automatically; a setup window may appear.)" -ForegroundColor DarkGray
 Push-Location (Join-Path $root "src-tauri")
 cargo tauri dev
