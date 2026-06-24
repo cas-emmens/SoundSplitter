@@ -1,5 +1,20 @@
 # sound-splitter
 
+## ⬇️ [Download the latest release](https://github.com/cas-emmens/SoundSplitter/releases/latest)
+
+Grab **`SoundSplitter-Setup-<version>.exe`** from the [latest release](https://github.com/cas-emmens/SoundSplitter/releases/latest) and run it. It's a **single, fully self-contained Windows installer** — no Python, Node, or internet required. Per-user install (no admin), and the app **auto-updates** itself from future releases.
+
+### Install guide (Windows 10/11, 64-bit)
+
+1. **Download & run** `SoundSplitter-Setup-….exe`. Windows SmartScreen may warn — click **More info → Run anyway** (the app isn't signed with a paid code-signing cert).
+2. **VB-CABLE** — install [VB-CABLE](https://vb-audio.com/Cable/) (admin install + reboot), then set Spotify's output device to **CABLE Input**. Required for capturing audio.
+3. **Spotify Developer app** — create a free app at the [Spotify dashboard](https://developer.spotify.com/dashboard), add the redirect URI `http://127.0.0.1:8000/api/spotify/callback`, and paste your **Client ID / Secret** into the `.env` the app creates on first run (it shows the exact path on the loading screen — `%APPDATA%\nl.emmens.soundsplitter\.env`). Restart the app after editing.
+4. Open the **Capture** tab → **Connect Spotify**, then search a song and hit **Record**.
+
+> Separation runs on **CPU** (portable), so expect a few minutes per song. Your library and settings live in `%APPDATA%` and survive updates. Needs the WebView2 runtime (ships with Windows 11).
+
+---
+
 A personal app that captures songs from Spotify, separates each into **6 instrument
 stems** (vocals / drums / bass / **guitar** / **piano** / other) offline with Demucs,
 stores them in a library, and replays them with a live stem mixer — mute **vocals +
