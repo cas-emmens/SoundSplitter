@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # backend/ directory (this file is backend/app/config.py)
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 # .env location is overridable so a packaged build can keep credentials in a
-# stable per-user dir (e.g. %APPDATA%\SoundSplitter) that survives upgrades,
+# stable per-user dir (e.g. %APPDATA%\nl.emmens.soundsplitter) that survives upgrades,
 # instead of inside the install dir. Defaults to backend/.env for dev.
 load_dotenv(os.getenv("SOUND_SPLITTER_ENV_FILE", str(BACKEND_DIR / ".env")))
 

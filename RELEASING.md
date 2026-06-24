@@ -65,12 +65,12 @@ This prints a **public key** and writes a password-protected **private key**. Th
 - **VB-CABLE** - kernel audio driver: install as admin + reboot, set Spotify's output to
   *CABLE Input*. Needed for capture.
 - **Spotify Developer credentials** - create a free dev app and paste Client ID/Secret into
-  `%APPDATA%\SoundSplitter\.env` (the app seeds this file from the example on first run and shows
+  `%APPDATA%\nl.emmens.soundsplitter\.env` (the app seeds this file from the example on first run and shows
   the path on the loading screen). Capture is inert until this is filled.
 
 ## Notes
 
-- Writable state (library, SQLite DB, Spotify token, `.env`) lives in `%APPDATA%\SoundSplitter\`,
+- Writable state (library, SQLite DB, Spotify token, `.env`) lives in `%APPDATA%\nl.emmens.soundsplitter\`,
   outside the install dir, so in-place upgrades don't wipe it.
 - Separation uses **CPU** torch (portable), so it takes a few minutes per song on the target.
 - The installer is per-user (`{localappdata}\Programs\SoundSplitter`, no admin).
