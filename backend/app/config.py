@@ -8,10 +8,15 @@ from dotenv import load_dotenv
 
 # backend/ directory (this file is backend/app/config.py)
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BACKEND_DIR / ".env")
+# .env location is overridable so a packaged build can keep credentials in a
+# stable per-user dir (e.g. %APPDATA%\SoundSplitter) that survives upgrades,
+# instead of inside the install dir. Defaults to backend/.env for dev.
+load_dotenv(os.getenv("SOUND_SPLITTER_ENV_FILE", str(BACKEND_DIR / ".env")))
 
 # --- Storage ---
-DATA_DIR = BACKEND_DIR / "data"
+# Writable data (library, SQLite DB, Spotify token cache) is likewise relocatable
+# so an in-place upgrade doesn't wipe it. Defaults to backend/data for dev.
+DATA_DIR = Path(os.getenv("SOUND_SPLITTER_DATA_DIR", str(BACKEND_DIR / "data")))
 LIBRARY_DIR = DATA_DIR / "library"      # data/library/{track_id}/{stem}.flac
 DB_PATH = DATA_DIR / "library.db"
 DATA_DIR.mkdir(parents=True, exist_ok=True)

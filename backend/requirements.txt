@@ -6,6 +6,7 @@
 fastapi
 uvicorn[standard]
 python-multipart
+python-dotenv  # config.py loads backend/.env via dotenv
 
 # Audio capture / IO
 sounddevice

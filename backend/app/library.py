@@ -128,7 +128,7 @@ def export_for_daw(track_id: str) -> str | None:
         encoder.write_wav(out_dir / f"{i:02d} - {_safe(r['name'])}.wav", buf, sr)
 
     (out_dir / "README.txt").write_text(
-        "Stems exported from Sound Splitter.\n"
+        "Stems exported from SoundSplitter.\n"
         f"Song: {song['artist']} - {song['title']}\n\n"
         "Import all WAVs and place each at the very start (0:00 / bar 1). They are\n"
         "trimmed, aligned to each other, and padded to the same length, so they will\n"
