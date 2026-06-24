@@ -189,7 +189,9 @@ if ($env:TAURI_SIGNING_PRIVATE_KEY) {
             }
         }
     }
-    $latest | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $root "dist\latest.json") -Encoding UTF8
+    # Write WITHOUT a BOM: serde_json in the updater rejects a leading BOM.
+    [IO.File]::WriteAllText((Join-Path $root "dist\latest.json"),
+        ($latest | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding $false))
     Ok "Signed; dist\latest.json written"
 } else {
     Warn "TAURI_SIGNING_PRIVATE_KEY not set ??? installer is UNSIGNED (fine for local testing; the auto-updater rejects unsigned updates). See RELEASING.md."
