@@ -88,6 +88,29 @@ export interface Tab {
   created_at: number;
 }
 
+export interface Progression {
+  id: number;
+  name: string;
+  root_pc: number;          // default key pitch-class (0=C .. 11=B)
+  quality: 'major' | 'minor';
+  chords: string[];         // roman numerals
+  tempo: number;            // default BPM
+  created_at: number;
+}
+export type ProgressionInput = Omit<Progression, 'id' | 'created_at'>;
+
+export interface WikiArticleStub {
+  slug: string;
+  title: string;
+  widget: string | null;       // interactive explorer to embed (or null)
+  widget_arg: string | null;   // preset for that explorer
+}
+export interface WikiCategory { name: string; articles: WikiArticleStub[]; }
+export interface WikiArticle extends WikiArticleStub {
+  category: string;
+  body: string;                // Markdown
+}
+
 @Injectable({ providedIn: 'root' })
 export class Api {
   private http = inject(HttpClient);
@@ -153,5 +176,27 @@ export class Api {
   }
   deleteTab(tabId: number) {
     return this.http.delete<{ ok: boolean }>(`${this.base}/tabs/${tabId}`);
+  }
+
+  // --- practice: user-saved chord progressions ---
+  listProgressions() {
+    return this.http.get<{ progressions: Progression[] }>(`${this.base}/progressions`);
+  }
+  createProgression(body: ProgressionInput) {
+    return this.http.post<Progression>(`${this.base}/progressions`, body);
+  }
+  updateProgression(id: number, body: ProgressionInput) {
+    return this.http.patch<Progression>(`${this.base}/progressions/${id}`, body);
+  }
+  deleteProgression(id: number) {
+    return this.http.delete<{ ok: boolean }>(`${this.base}/progressions/${id}`);
+  }
+
+  // --- music-theory wiki ---
+  wiki() {
+    return this.http.get<{ categories: WikiCategory[] }>(`${this.base}/wiki`);
+  }
+  wikiArticle(slug: string) {
+    return this.http.get<WikiArticle>(`${this.base}/wiki/${slug}`);
   }
 }

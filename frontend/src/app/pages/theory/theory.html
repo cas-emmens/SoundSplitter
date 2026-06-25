@@ -1,0 +1,177 @@
+<div class="theory">
+  <aside class="topics">
+    <h1>Theory</h1>
+    @for (cat of categories(); track cat.name) {
+      <div class="cat">
+        <h2>{{ cat.name }}</h2>
+        @for (a of cat.articles; track a.slug) {
+          <button [class.active]="a.slug === currentSlug()" (click)="openArticle(a.slug)">{{ a.title }}</button>
+        }
+      </div>
+    }
+  </aside>
+
+  <section class="content">
+    @if (article(); as art) {
+      <article class="wiki-body" [innerHTML]="renderedBody()"></article>
+
+      <!-- Interactive explorer embedded per the article's widget -->
+      @if (widget()) {
+        <div class="panel try">
+          <h3 class="try-head">Try it</h3>
+
+          @switch (widget()) {
+            @case ('intervals') {
+              <label class="inline">Root
+                <select [ngModel]="keyRoot()" (ngModelChange)="keyRoot.set($event)">
+                  @for (r of roots; track r.pc) { <option [ngValue]="r.pc">{{ r.label }}</option> }
+                </select>
+              </label>
+              <div class="interval-grid">
+                @for (name of fullIntervals; track $index) {
+                  <button class="interval" (click)="playInterval($index)">
+                    <span class="semis">{{ $index }}</span><span>{{ name }}</span>
+                  </button>
+                }
+              </div>
+            }
+
+            @case ('scales') {
+              <div class="row">
+                <label class="inline">Root
+                  <select [ngModel]="keyRoot()" (ngModelChange)="keyRoot.set($event)">
+                    @for (r of roots; track r.pc) { <option [ngValue]="r.pc">{{ r.label }}</option> }
+                  </select>
+                </label>
+                <label class="inline">Scale
+                  <select [ngModel]="scaleId()" (ngModelChange)="scaleId.set($event)">
+                    @for (s of scales; track s.id) { <option [ngValue]="s.id">{{ s.name }}</option> }
+                  </select>
+                </label>
+                <label class="inline">Tuning
+                  <select [ngModel]="tuningId()" (ngModelChange)="tuningId.set($event)">
+                    @for (t of tunings; track t.id) { <option [ngValue]="t.id">{{ t.name }}</option> }
+                  </select>
+                </label>
+              </div>
+              <div class="notes">
+                @for (pc of scalePcs(); track $index) {
+                  <span class="note" [class.root]="$index === 0">{{ pcName(pc, scale().preferFlats) }}</span>
+                }
+              </div>
+              <app-fretboard [tuning]="tuning()" [positions]="scalePositions()" />
+              <div class="row tight">
+                <button class="ghost" (click)="playScale()">▶ Hear it</button>
+                <button class="primary" (click)="practiceScale()">Practice this scale →</button>
+              </div>
+            }
+
+            @case ('chords') {
+              <div class="row">
+                <label class="inline">Root
+                  <select [ngModel]="chordRoot()" (ngModelChange)="chordRoot.set($event)">
+                    @for (r of roots; track r.pc) { <option [ngValue]="r.pc">{{ r.label }}</option> }
+                  </select>
+                </label>
+                <label class="inline">Type
+                  <select [ngModel]="chordId()" (ngModelChange)="chordId.set($event); inversion.set(0)">
+                    @for (c of chords; track c.id) { <option [ngValue]="c.id">{{ c.name }}</option> }
+                  </select>
+                </label>
+                <label class="inline">Tuning
+                  <select [ngModel]="tuningId()" (ngModelChange)="tuningId.set($event)">
+                    @for (t of tunings; track t.id) { <option [ngValue]="t.id">{{ t.name }}</option> }
+                  </select>
+                </label>
+              </div>
+              <h4 class="chord-title">{{ chordLabel() }} <small>{{ chord().name }}</small></h4>
+              <div class="notes">
+                @for (t of chordTones(); track $index) {
+                  <span class="note"><b>{{ pcName(t.pc) }}</b><small>{{ t.label }}</small></span>
+                }
+              </div>
+              <app-fretboard [tuning]="tuning()" [positions]="chordPositions()" [highlightPcs]="chordPcs()" />
+              <div class="row tight">
+                <button class="ghost" (click)="playChord()">▶ Hear it</button>
+                <button class="ghost" (click)="cycleInversion()">↻ {{ inversionNames[inversion()] }}</button>
+              </div>
+
+              @if (chordShapes().length) {
+                <h4 class="shapes-head">How to play it <small>· standard tuning · tap a shape to hear it</small></h4>
+                <div class="shapes">
+                  @for (sh of chordShapes(); track sh.name) {
+                    <button class="shape" (click)="playShape(sh)" [title]="'Play ' + sh.name">
+                      <app-chord-diagram [shape]="sh" />
+                      <span class="shape-name">{{ sh.name }}</span>
+                    </button>
+                  }
+                </div>
+              }
+            }
+
+            @case ('keys') {
+              <div class="row">
+                <label class="inline">Key
+                  <select [ngModel]="keyRoot()" (ngModelChange)="keyRoot.set($event)">
+                    @for (r of roots; track r.pc) { <option [ngValue]="r.pc">{{ r.label }}</option> }
+                  </select>
+                </label>
+                <label class="inline">Quality
+                  <select [ngModel]="keyQuality()" (ngModelChange)="keyQuality.set($event)">
+                    <option value="major">Major</option>
+                    <option value="minor">Minor</option>
+                  </select>
+                </label>
+                <label class="check inline">
+                  <input type="checkbox" [ngModel]="sevenths()" (ngModelChange)="sevenths.set($event)" /> 7th chords
+                </label>
+              </div>
+              <div class="diatonic">
+                @for (d of diatonic(); track d.degree) {
+                  <button class="dia" (click)="playDiatonic(d)">
+                    <span class="roman">{{ d.roman }}</span>
+                    <span class="name">{{ d.name }}</span>
+                  </button>
+                }
+              </div>
+            }
+
+            @case ('progressions') {
+              <div class="row">
+                <label class="inline">Key
+                  <select [ngModel]="keyRoot()" (ngModelChange)="keyRoot.set($event); progPreview.set(0)">
+                    @for (r of roots; track r.pc) { <option [ngValue]="r.pc">{{ r.label }}</option> }
+                  </select>
+                </label>
+                <label class="inline">Progression
+                  <select [ngModel]="progId()" (ngModelChange)="progId.set($event); progPreview.set(0)">
+                    @for (p of presets; track p.id) { <option [ngValue]="p.id">{{ p.name }}</option> }
+                  </select>
+                </label>
+                <label class="inline">Tuning
+                  <select [ngModel]="tuningId()" (ngModelChange)="tuningId.set($event)">
+                    @for (t of tunings; track t.id) { <option [ngValue]="t.id">{{ t.name }}</option> }
+                  </select>
+                </label>
+              </div>
+              <div class="chords">
+                @for (c of progChords(); track $index) {
+                  <button class="chord" [class.active]="$index === progPreview()" (click)="playProgChord($index)">
+                    <span class="roman">{{ preset().chords[$index] }}</span>
+                    <span class="name">{{ c.name }}</span>
+                  </button>
+                }
+              </div>
+              <app-fretboard [tuning]="tuning()" [positions]="progPositions()" />
+              <div class="row tight">
+                <button class="primary" (click)="practiceProgression()">Practice this progression →</button>
+              </div>
+            }
+          }
+        </div>
+      }
+    } @else {
+      <p class="loading">Loading…</p>
+    }
+  </section>
+</div>

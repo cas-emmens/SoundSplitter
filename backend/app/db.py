@@ -48,6 +48,30 @@ CREATE TABLE IF NOT EXISTS tabs (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tabs_track ON tabs(track_id);
+CREATE TABLE IF NOT EXISTS progressions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    root_pc    INTEGER NOT NULL DEFAULT 0,    -- default key pitch-class (0=C .. 11=B)
+    quality    TEXT NOT NULL DEFAULT 'major', -- 'major' | 'minor' key flavour
+    chords     TEXT NOT NULL,                 -- JSON array of roman numerals
+    tempo      INTEGER NOT NULL DEFAULT 100,  -- default BPM
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wiki_articles (
+    slug           TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    category       TEXT NOT NULL,
+    category_order INTEGER NOT NULL DEFAULT 0,
+    sort           INTEGER NOT NULL DEFAULT 0,
+    widget         TEXT,                       -- interactive explorer to embed (or NULL)
+    widget_arg     TEXT,                       -- preset for that explorer (e.g. 'dorian')
+    body           TEXT NOT NULL,              -- Markdown
+    updated_at     REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -225,3 +249,97 @@ def get_tabs(track_id: str) -> list[dict]:
 def delete_tab(tab_id: int) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM tabs WHERE id=?", (tab_id,))
+
+
+# --- practice: user-saved chord progressions (global, not tied to a song) ---
+
+def create_progression(name: str, root_pc: int, quality: str, chords_json: str, tempo: int) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO progressions (name, root_pc, quality, chords, tempo, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, root_pc, quality, chords_json, tempo, time.time()),
+        )
+        return int(cur.lastrowid)
+
+
+def get_progressions() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM progressions ORDER BY created_at").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_progression(prog_id: int) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM progressions WHERE id=?", (prog_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_progression(prog_id: int, *, name: Optional[str] = None, root_pc: Optional[int] = None,
+                       quality: Optional[str] = None, chords_json: Optional[str] = None,
+                       tempo: Optional[int] = None) -> None:
+    sets, vals = [], []
+    for col, val in (("name", name), ("root_pc", root_pc), ("quality", quality),
+                     ("chords", chords_json), ("tempo", tempo)):
+        if val is not None:
+            sets.append(f"{col}=?")
+            vals.append(val)
+    if not sets:
+        return
+    vals.append(prog_id)
+    with get_conn() as conn:
+        conn.execute(f"UPDATE progressions SET {', '.join(sets)} WHERE id=?", vals)
+
+
+def delete_progression(prog_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM progressions WHERE id=?", (prog_id,))
+
+
+# --- music-theory wiki (reference content, seeded from the bundled wiki_content module) ---
+
+def seed_wiki(version: int, articles: list[dict]) -> bool:
+    """Upsert the bundled wiki content into the DB, but only when it's newer than what's stored.
+
+    Guarded by an integer content version in app_meta so first launch seeds it and a later app
+    update (which bumps WIKI_VERSION) re-seeds it, while an unchanged version is a cheap no-op.
+    Returns True if it (re)seeded. Wiki rows are reference data, not user data, so this overwrites.
+    """
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM app_meta WHERE key='wiki_version'").fetchone()
+        stored = int(row["value"]) if row and row["value"] is not None else -1
+        if stored >= version:
+            return False
+        now = time.time()
+        slugs = [a["slug"] for a in articles]
+        for a in articles:
+            conn.execute(
+                """INSERT OR REPLACE INTO wiki_articles
+                   (slug, title, category, category_order, sort, widget, widget_arg, body, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (a["slug"], a["title"], a["category"], a.get("category_order", 0), a.get("order", 0),
+                 a.get("widget"), a.get("widget_arg"), a["body"], now),
+            )
+        # Drop any articles removed since the last seed.
+        if slugs:
+            placeholders = ",".join("?" * len(slugs))
+            conn.execute(f"DELETE FROM wiki_articles WHERE slug NOT IN ({placeholders})", slugs)
+        conn.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('wiki_version', ?)",
+                     (str(version),))
+        return True
+
+
+def get_wiki_index() -> list[dict]:
+    """All articles without bodies, ordered for the sidebar."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT slug, title, category, category_order, sort, widget, widget_arg
+               FROM wiki_articles ORDER BY category_order, sort, title"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_wiki_article(slug: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM wiki_articles WHERE slug=?", (slug,)).fetchone()
+        return dict(row) if row else None

@@ -9,7 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
-from . import (capture, config, db, jobs, library, separator, spotify, tabgen)
+from . import (capture, config, db, jobs, library, separator, spotify, tabgen, wiki_content)
 
 app = FastAPI(title="sound-splitter")
 
@@ -24,6 +24,8 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    # Seed/refresh the music-theory wiki from the bundled content (no-op when already current).
+    db.seed_wiki(wiki_content.WIKI_VERSION, wiki_content.ARTICLES)
     # A 'capturing' row means a recording was interrupted by a restart; its audio
     # lived only in the in-memory ring, so it can't be recovered — drop it.
     for song in db.list_songs():
@@ -287,6 +289,101 @@ def remove_stem(stem_id: int) -> dict:
     Path(stem["path"]).unlink(missing_ok=True)
     db.delete_stem(stem_id)
     return {"ok": True}
+
+
+# --- practice: user-saved chord progressions (global) ---
+def _progression_dict(row: dict) -> dict:
+    import json
+
+    return {
+        "id": row["id"], "name": row["name"], "root_pc": row["root_pc"],
+        "quality": row["quality"], "chords": json.loads(row["chords"]),
+        "tempo": row["tempo"], "created_at": row["created_at"],
+    }
+
+
+def _validate_progression(payload: dict) -> tuple[str, int, str, str, int]:
+    """Pull + validate the progression fields from a request body. Returns the DB-ready tuple."""
+    import json
+
+    name = (payload.get("name") or "").strip()
+    chords = payload.get("chords")
+    if not name:
+        raise HTTPException(400, "name is required")
+    if not isinstance(chords, list) or not chords or not all(isinstance(c, str) for c in chords):
+        raise HTTPException(400, "chords must be a non-empty array of roman numerals")
+    quality = payload.get("quality", "major")
+    if quality not in ("major", "minor"):
+        raise HTTPException(400, "quality must be 'major' or 'minor'")
+    root_pc = int(payload.get("root_pc", 0)) % 12
+    tempo = max(20, min(400, int(payload.get("tempo", 100))))
+    return name, root_pc, quality, json.dumps(chords), tempo
+
+
+@app.get("/api/progressions")
+def list_progressions() -> dict:
+    return {"progressions": [_progression_dict(p) for p in db.get_progressions()]}
+
+
+@app.post("/api/progressions")
+def create_progression(payload: dict) -> dict:
+    name, root_pc, quality, chords_json, tempo = _validate_progression(payload)
+    pid = db.create_progression(name, root_pc, quality, chords_json, tempo)
+    return _progression_dict(db.get_progression(pid))
+
+
+@app.get("/api/progressions/{prog_id}")
+def get_progression(prog_id: int) -> dict:
+    prog = db.get_progression(prog_id)
+    if prog is None:
+        raise HTTPException(404, "progression not found")
+    return _progression_dict(prog)
+
+
+@app.patch("/api/progressions/{prog_id}")
+def update_progression(prog_id: int, payload: dict) -> dict:
+    if db.get_progression(prog_id) is None:
+        raise HTTPException(404, "progression not found")
+    name, root_pc, quality, chords_json, tempo = _validate_progression(payload)
+    db.update_progression(prog_id, name=name, root_pc=root_pc, quality=quality,
+                          chords_json=chords_json, tempo=tempo)
+    return _progression_dict(db.get_progression(prog_id))
+
+
+@app.delete("/api/progressions/{prog_id}")
+def delete_progression(prog_id: int) -> dict:
+    db.delete_progression(prog_id)
+    return {"ok": True}
+
+
+# --- music-theory wiki (seeded reference content) ---
+@app.get("/api/wiki")
+def wiki_index() -> dict:
+    """Articles grouped by category, in display order, without bodies."""
+    categories: list[dict] = []
+    by_name: dict[str, dict] = {}
+    for a in db.get_wiki_index():
+        cat = by_name.get(a["category"])
+        if cat is None:
+            cat = {"name": a["category"], "articles": []}
+            by_name[a["category"]] = cat
+            categories.append(cat)
+        cat["articles"].append({
+            "slug": a["slug"], "title": a["title"],
+            "widget": a["widget"], "widget_arg": a["widget_arg"],
+        })
+    return {"categories": categories}
+
+
+@app.get("/api/wiki/{slug}")
+def wiki_article(slug: str) -> dict:
+    a = db.get_wiki_article(slug)
+    if a is None:
+        raise HTTPException(404, "article not found")
+    return {
+        "slug": a["slug"], "title": a["title"], "category": a["category"],
+        "widget": a["widget"], "widget_arg": a["widget_arg"], "body": a["body"],
+    }
 
 
 # --- file serving ---

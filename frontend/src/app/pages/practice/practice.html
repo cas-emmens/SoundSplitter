@@ -1,0 +1,190 @@
+<div class="practice">
+  <header class="page-head">
+    <h1>Freeflow practice</h1>
+    <a routerLink="/theory" class="muted-link">↗ Theory reference</a>
+  </header>
+
+  <div class="modes">
+    <button [class.primary]="mode() === 'progression'" (click)="setMode('progression')">Chord progression</button>
+    <button [class.primary]="mode() === 'scale'" (click)="setMode('scale')">Scale</button>
+  </div>
+
+  <!-- Shared transport row -->
+  <div class="panel controls">
+    <label>Key
+      <select [ngModel]="keyRoot()" (ngModelChange)="setKeyRoot($event)">
+        @for (r of roots; track r.pc) { <option [ngValue]="r.pc">{{ r.label }}</option> }
+      </select>
+    </label>
+
+    @if (mode() === 'progression') {
+      <label>Feel
+        <select [ngModel]="progQuality()" (ngModelChange)="stop(); progQuality.set($event)">
+          <option value="major">Major key</option>
+          <option value="minor">Minor key</option>
+        </select>
+      </label>
+    }
+
+    <label>Tuning
+      <select [ngModel]="tuningId()" (ngModelChange)="tuningId.set($event)">
+        @for (t of tunings; track t.id) { <option [ngValue]="t.id">{{ t.name }}</option> }
+      </select>
+    </label>
+
+    <label class="tempo">
+      <span class="tempo-head">Tempo
+        <input type="number" class="bpm-input" min="40" max="240" [ngModel]="bpm()"
+               (change)="setTempo($any($event.target).value)" /> BPM
+      </span>
+      <input type="range" min="40" max="240" [ngModel]="bpm()" (ngModelChange)="bpm.set(+$event)" />
+    </label>
+
+    <label class="check">
+      <input type="checkbox" [ngModel]="audio.referenceTones" (ngModelChange)="audio.referenceTones = $event" />
+      Play reference tones
+    </label>
+
+    <button class="primary play" (click)="togglePlay()">{{ playing() ? '■ Stop' : '▶ Play' }}</button>
+  </div>
+
+  <!-- Display: scale neck dims to the hand window; chord neck lights only the window-fitted voicing -->
+  <div class="panel">
+    @if (mode() === 'scale') {
+      <app-fretboard [tuning]="tuning()" [positions]="positions()" [highlightPcs]="highlightPcs()"
+                     [dimInactive]="true" [handWindow]="handWindow()" />
+    } @else {
+      <app-fretboard [tuning]="standardTuning" [positions]="progNeckPositions()" [handWindow]="handWindow()" />
+    }
+    <div class="hand-row">
+      <label class="check">
+        <input type="checkbox" [ngModel]="handPosition()" (ngModelChange)="handPosition.set($event)" />
+        Hand position
+      </label>
+      @if (handPosition()) {
+        <label class="slider">From fret <b>{{ handStart() }}</b>
+          <input type="range" min="0" [max]="MAX_FRET - handSpan()"
+                 [ngModel]="handStart()" (ngModelChange)="handStart.set(+$event)" />
+        </label>
+        <label>Span
+          <select [ngModel]="handSpan()" (ngModelChange)="setHandSpan(+$event)">
+            @for (n of [3,4,5,6]; track n) { <option [ngValue]="n">{{ n }} frets</option> }
+          </select>
+        </label>
+        <span class="window-label">Frets {{ handStart() }}–{{ handStart() + handSpan() }}</span>
+      }
+    </div>
+
+    @if (mode() === 'progression') {
+      <div class="chord-shapes">
+        @for (item of progShapes(); track $index) {
+          <div class="chord-card" [class.active]="$index === currentChordIndex()">
+            @if (item.shape) {
+              <app-chord-diagram [shape]="item.shape" />
+            } @else {
+              <div class="no-shape">no diagram</div>
+            }
+            <span class="card-name">{{ item.rc.name }}</span>
+            <span class="card-roman">{{ item.roman }}</span>
+          </div>
+        }
+      </div>
+    }
+  </div>
+
+  <!-- Progression mode -->
+  @if (mode() === 'progression') {
+    <div class="panel">
+      <div class="row">
+        <label>Progression
+          <select [ngModel]="progSource()" (ngModelChange)="selectProgression($event)">
+            <optgroup label="Built-in">
+              @for (p of presets; track p.id) { <option [ngValue]="p.id">{{ p.name }}</option> }
+            </optgroup>
+            @if (customs().length) {
+              <optgroup label="My progressions">
+                @for (c of customs(); track c.id) { <option [ngValue]="'custom:' + c.id">{{ c.name }}</option> }
+              </optgroup>
+            }
+          </select>
+        </label>
+        <label>Beats / chord
+          <select [ngModel]="beatsPerChord()" (ngModelChange)="stop(); beatsPerChord.set(+$event)">
+            @for (n of [1,2,3,4,6,8]; track n) { <option [ngValue]="n">{{ n }}</option> }
+          </select>
+        </label>
+        <button class="ghost" (click)="newProgression()">+ New progression</button>
+      </div>
+
+      @if (progSource().startsWith('custom:')) {
+        <div class="row tight">
+          @for (c of customs(); track c.id) {
+            @if ('custom:' + c.id === progSource()) {
+              <button class="ghost" (click)="editCustom(c)">Edit</button>
+              <button class="ghost danger" (click)="deleteCustom(c)">Delete</button>
+            }
+          }
+        </div>
+      }
+    </div>
+
+    <!-- Editor -->
+    @if (editorOpen()) {
+      <div class="panel editor">
+        <h3>{{ editorId() === null ? 'New progression' : 'Edit progression' }}</h3>
+        <p class="hint">Build it from the diatonic chords of the current key. Stored as roman numerals,
+          so it transposes to any key you pick.</p>
+        <input type="text" placeholder="Name" [ngModel]="editorName()" (ngModelChange)="editorName.set($event)" />
+        <div class="palette">
+          @for (d of diatonic(); track d.degree) {
+            <button class="ghost" (click)="addChord(d.roman)">{{ d.roman }} <small>{{ d.name }}</small></button>
+          }
+          <button class="ghost" (click)="addChord('V7')">V7</button>
+          <button class="ghost" (click)="addChord('bVII')">bVII</button>
+        </div>
+        <div class="chords editing">
+          @for (r of editorChords(); track $index) { <div class="chord"><span class="roman">{{ r }}</span></div> }
+          @if (!editorChords().length) { <span class="hint">No chords yet — tap chords above.</span> }
+        </div>
+        <div class="row tight">
+          <button class="ghost" (click)="removeLastChord()" [disabled]="!editorChords().length">⌫ Remove last</button>
+          <button class="ghost" (click)="clearChords()" [disabled]="!editorChords().length">Clear</button>
+          <button class="primary" (click)="saveProgression()"
+                  [disabled]="saving() || !editorName().trim() || !editorChords().length">
+            {{ saving() ? 'Saving…' : 'Save' }}
+          </button>
+          <button class="ghost" (click)="editorOpen.set(false)">Cancel</button>
+        </div>
+      </div>
+    }
+  }
+
+  <!-- Scale mode -->
+  @if (mode() === 'scale') {
+    <div class="panel">
+      <div class="row">
+        <label>Scale
+          <select [ngModel]="scaleId()" (ngModelChange)="stop(); scaleId.set($event)">
+            @for (s of scales; track s.id) { <option [ngValue]="s.id">{{ s.name }}</option> }
+          </select>
+        </label>
+        <label>Direction
+          <select [ngModel]="direction()" (ngModelChange)="stop(); direction.set($event)">
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+            <option value="both">Up & down</option>
+          </select>
+        </label>
+        <label>Notes / tick
+          <select [ngModel]="notesPerBeat()" (ngModelChange)="stop(); notesPerBeat.set(+$event)">
+            @for (n of [1,2,3,4]; track n) { <option [ngValue]="n">{{ n }}</option> }
+          </select>
+        </label>
+      </div>
+      <p class="now-playing">
+        @if (playing() && currentScaleNoteName()) { Now: <b>{{ currentScaleNoteName() }}</b> }
+        @else { {{ scales.length ? 'Press play to run the scale under the metronome.' : '' }} }
+      </p>
+    </div>
+  }
+</div>
