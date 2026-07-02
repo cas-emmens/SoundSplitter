@@ -35,7 +35,28 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   trackId = '';
 
   private at?: alphaTab.AlphaTabApi;
+  private atMode?: 'recording' | 'synth';
   private raf = 0;
+
+  // --- playback source: the real recording (warp-synced cursor) or alphaTab's synthesizer
+  // (raw tab timing, speed control — for slow practice before trying the real thing) ---
+  mode = signal<'recording' | 'synth'>(
+    localStorage.getItem('tabs.mode') === 'synth' ? 'synth' : 'recording');
+  synthSpeed = signal(Number(localStorage.getItem('tabs.synthSpeed')) || 1);
+  synthReady = signal(false);
+
+  setMode(m: 'recording' | 'synth') {
+    if (m === this.mode()) return;
+    this.stop();  // switching modes restarts the song
+    this.mode.set(m);
+    localStorage.setItem('tabs.mode', m);
+  }
+
+  setSynthSpeed(v: number) {
+    this.synthSpeed.set(v);
+    localStorage.setItem('tabs.synthSpeed', String(v));
+    if (this.at && this.atMode === 'synth') this.at.playbackSpeed = v;
+  }
 
   constructor() {
     // The score host lives inside an `@if (tabs().length)` block, so it does NOT exist yet when
@@ -46,8 +67,15 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     // the selected tab changes. (Reads `atHost()` + `selected()` so it re-fires on both.)
     effect(() => {
       const host = this.atHost();
+      const mode = this.mode();
       if (!host) return;
-      this.ensureAlphaTab(host.nativeElement);
+      if (this.at && this.atMode !== mode) {
+        // Mode switch rebuilds the player (external-media vs synthesizer wiring differs
+        // at construction); playback deliberately restarts from the top.
+        this.at.destroy();
+        this.at = undefined;
+      }
+      this.ensureAlphaTab(host.nativeElement, mode);
       this.renderSelected();
     });
   }
@@ -111,7 +139,9 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
       // Loading a new score STOPS alphaTab's transport, which pauses/rewinds the mixer
       // through our handler — so capture the state first and suppress those transport
       // commands during the switch; then re-arm so the cursor carries on mid-song.
-      const wasRolling = this.mix.isPlaying;
+      // (Recording mode only: the synth has no mixer to carry on with — a tab switch
+      // there just stops, like the mode switch does.)
+      const wasRolling = this.atMode !== 'synth' && this.mix.isPlaying;
       if (wasRolling) this.suppressTransportUntil = performance.now() + 1000;
       this.at.tex(src);
       // Re-apply layout once the host has its real width (it may be mid-layout on first paint):
@@ -208,19 +238,38 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
-  private ensureAlphaTab(host: HTMLDivElement) {
+  private ensureAlphaTab(host: HTMLDivElement, mode: 'recording' | 'synth') {
     if (this.at) return;
+    this.atMode = mode;
+    const synth = mode === 'synth';
     this.at = new alphaTab.AlphaTabApi(host, {
-      core: { fontDirectory: '/alphatab/font/', useWorkers: false },
+      core: {
+        fontDirectory: '/alphatab/font/',
+        scriptFile: '/alphatab/alphaTab.min.js',  // the synth's audio worklet loads this
+        useWorkers: false,
+      },
       display: { layoutMode: alphaTab.LayoutMode.Page, scale: 1.0, barsPerRow: this.barsPerRow() },
       player: {
-        playerMode: alphaTab.PlayerMode.EnabledExternalMedia,
+        playerMode: synth
+          ? alphaTab.PlayerMode.EnabledSynthesizer
+          : alphaTab.PlayerMode.EnabledExternalMedia,
+        soundFont: synth ? '/alphatab/soundfont/sonivox.sf3' : undefined,
         enableCursor: true,
         enableAnimatedBeatCursor: true,
         scrollMode: alphaTab.ScrollMode.Off,   // we autoscroll ourselves
       },
     });
-    this.attachExternalMedia();
+    if (synth) {
+      this.synthReady.set(false);
+      this.at.playerReady.on(() => this.synthReady.set(true));
+      this.at.playerStateChanged.on((e) =>
+        this.playing.set(e.state === alphaTab.synth.PlayerState.Playing));
+      this.at.playerPositionChanged.on(() => this.autoScroll());
+      this.at.playbackSpeed = this.synthSpeed();
+      this.at.countInVolume = this.countIn() ? 1 : 0;  // native count-in (tempo-correct at any speed)
+    } else {
+      this.attachExternalMedia();
+    }
   }
 
   /** Bars per line from the SCORE CONTAINER's real width (not the window — the score area is
@@ -345,9 +394,11 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   toggleCountIn() {
     this.countIn.update((v) => !v);
     localStorage.setItem('tabs.countIn', this.countIn() ? '1' : '0');
+    if (this.at && this.atMode === 'synth') this.at.countInVolume = this.countIn() ? 1 : 0;
   }
 
   togglePlay() {
+    if (this.atMode === 'synth') { this.at?.playPause(); return; }  // count-in is native there
     if (this.countingIn()) { this.cancelCountIn(); return; }
     if (!this.playing() && this.countIn()) { this.startCountIn(); return; }
     this.at?.playPause();

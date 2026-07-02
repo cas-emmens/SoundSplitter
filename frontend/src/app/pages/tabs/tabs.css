@@ -50,6 +50,7 @@
   background: #2a2a32; color: #eee; border: 1px solid #3a3a44; border-radius: 6px;
   padding: 0.35rem 0.6rem; font-size: 0.85rem; min-width: 160px;
 }
+.toolbar select.speed { min-width: 80px; }
 
 .status { color: #f0c674; font-size: 0.9rem; margin: 0; }
 .hint, .muted { color: #889; font-size: 0.9rem; }

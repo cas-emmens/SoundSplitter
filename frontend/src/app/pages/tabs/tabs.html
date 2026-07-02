@@ -13,7 +13,8 @@
       <button class="danger" (click)="deleteTab()" [disabled]="selectedId() == null || editing()" title="Delete this tab">🗑 Delete</button>
       <span class="sep"></span>
       @if (!editing()) {
-        <button (click)="togglePlay()" [disabled]="!mixerReady()">
+        <button (click)="togglePlay()"
+                [disabled]="mode() === 'recording' ? !mixerReady() : !synthReady()">
           {{ countingIn() ? '🕰 ' + 'count…' : playing() ? '⏸ Pause' : '▶ Play' }}
         </button>
         <button (click)="stop()">⏹ Stop</button>
@@ -21,6 +22,24 @@
                 title="Play four metronome ticks at the song's tempo before starting">
           🕰 count-in
         </button>
+        <span class="sep"></span>
+        <button class="toggle" [class.on]="mode() === 'recording'" (click)="setMode('recording')"
+                title="Play along with the real recording (cursor follows the performance)">
+          🎙 recording
+        </button>
+        <button class="toggle" [class.on]="mode() === 'synth'" (click)="setMode('synth')"
+                title="Synthesized tab playback at exact tab timing — practice slowly">
+          🎸 synth
+        </button>
+        @if (mode() === 'synth') {
+          <select class="speed" [ngModel]="synthSpeed()" (ngModelChange)="setSynthSpeed($event)"
+                  title="Playback speed (pitch stays correct)">
+            <option [ngValue]="0.25">25%</option>
+            <option [ngValue]="0.5">50%</option>
+            <option [ngValue]="0.75">75%</option>
+            <option [ngValue]="1">100%</option>
+          </select>
+        }
         <span class="sep"></span>
         <button (click)="startEdit()" [disabled]="selectedId() == null" title="Edit this tab's notes">✎ Edit</button>
       } @else {
