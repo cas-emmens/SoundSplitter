@@ -442,17 +442,18 @@ def _dtw_pairs_banded(groups: list[NoteGroup], note_beats: list[Beat],
     return pairs
 
 
-def _anchors_of(pairs, groups, note_beats, trend=None, band=None):
+def _anchors_of(pairs, groups, note_beats, trend=None, band=None, ambiguity_window=2.5):
     """Exact pitch matches on locally *distinctive* beats, as (notated, audio) anchors.
 
     With ``trend``/``band``, only matches whose audio time lies within the band of the
     trend anchor the warp: the banded DTW's out-of-band penalty is soft (a hard wall can
     make the path infeasible), so a starved stretch — a part barely audible in the stem —
     can still take penalized far-away matches, and those must not steer the cursor.
-    Beats whose pitch-set repeats nearby (see :func:`distinct_beat_ids`) never anchor:
-    their evidence could belong to a different repetition.
+    Beats whose pitch-set repeats within ``ambiguity_window`` (see :func:`distinct_beat_ids`)
+    never anchor: their evidence could belong to a different repetition. The window scales
+    with the band in use — inside a tight band, twins two seconds apart ARE distinguishable.
     """
-    distinct = distinct_beat_ids(note_beats)
+    distinct = distinct_beat_ids(note_beats, window=ambiguity_window)
     anchors, matched = [], set()
     for ai, bj in pairs:
         beat = note_beats[bj]
@@ -506,9 +507,12 @@ def distinct_beat_ids(note_beats: list[Beat], window: float = 2.5) -> set[int]:
     the DTW — they shape the path — but the warp is built from beats whose audio evidence
     can only belong to them; repeat-heavy stretches interpolate on the notated timeline.
     """
-    by_key: dict[frozenset[int], list[Beat]] = {}
+    by_key: dict[tuple[frozenset[int], frozenset[int]], list[Beat]] = {}
     for b in note_beats:
-        by_key.setdefault(frozenset(b.pitches), []).append(b)
+        # The key includes the bend targets: a bent 7 SOUNDS different from a plain 7, so
+        # it is distinctive evidence even when plain 7s surround it — the solo's bends are
+        # its anchoring backbone, and keying on base pitches alone gated them all away.
+        by_key.setdefault((frozenset(b.pitches), frozenset(b.alts)), []).append(b)
     ambiguous: set[int] = set()
     for twins in by_key.values():
         for i in range(1, len(twins)):
@@ -585,6 +589,20 @@ def _assign_sides(counts: list[tuple[int, int]]) -> list[str]:
     return [p if owner.get(p) == i else "mono" for i, p in enumerate(prefs)]
 
 
+def _pin_identity(anchors: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Extend a warp trend beyond its anchors at slope 1 (tempo-exact continuation).
+
+    A piecewise-linear warp clamps flat outside its anchors, letting head/tail regions
+    drift anywhere inside a formally-satisfied band. The backward pin follows slope 1
+    down to audio zero — clamping its audio at zero while pushing notated far negative
+    (an earlier bug) created a near-flat segment across the whole head of the song for
+    parts whose anchors start late.
+    """
+    (n0, a0), (n1, a1) = anchors[0], anchors[-1]
+    span = 24 * 3600.0
+    return _monotonic([(n0 - a0, 0.0), *anchors, (n1 + span, a1 + span)])
+
+
 def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
     """Realign weakly-anchored parts around the best-anchored part's warp.
 
@@ -600,12 +618,7 @@ def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
     if not scored:
         return
     ref_i, ref = max(scored, key=lambda s: len(s[1]["anchors"]))
-    anchors = ref["anchors"]
-    (n0, a0), (n1, a1) = anchors[0], anchors[-1]
-    span = 24 * 3600.0
-    trend = _monotonic(
-        [(n0 - span, max(0.0, a0 - span)), *anchors, (n1 + span, a1 + span)]
-    )
+    trend = _pin_identity(ref["anchors"])
     for i, (tex, chosen, side) in enumerate(picked):
         if i == ref_i or chosen is None:
             continue
@@ -615,12 +628,23 @@ def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
         band = 3.0
         pairs = _dtw_pairs_banded(chosen["groups"], nb, trend, band)
         refined, matched = _anchors_of(pairs, chosen["groups"], nb, trend=trend, band=band)
-        if len(refined) >= 4:
-            picked[i] = (
-                tex,
-                {**chosen, "anchors": refined, "matched": matched, "n": len(matched)},
-                side,
-            )
+        if len(refined) < 4:
+            continue
+        # Second, tighter iteration around the part's OWN safe anchors: within a ±1.5s band
+        # twins two seconds apart are distinguishable, so more beats may anchor — this is
+        # what densifies a repetitive solo without re-admitting wrong-repetition matches.
+        own = _pin_identity(refined)
+        pairs2 = _dtw_pairs_banded(chosen["groups"], nb, own, 1.5)
+        refined2, matched2 = _anchors_of(
+            pairs2, chosen["groups"], nb, trend=own, band=1.5, ambiguity_window=2.0
+        )
+        if len(refined2) >= len(refined):
+            refined, matched = refined2, matched2
+        picked[i] = (
+            tex,
+            {**chosen, "anchors": refined, "matched": matched, "n": len(matched)},
+            side,
+        )
 
 
 def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[dict]:
