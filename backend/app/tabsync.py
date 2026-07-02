@@ -265,11 +265,26 @@ def group_onsets(events, window: float = 0.07) -> list[NoteGroup]:
 # --------------------------------------------------------------------------- alignment
 
 def _cost(audio: set[int], tab: list[int]) -> float:
-    """Pitch-set distance: 0 exact overlap, .4 octave, .7 pitch-class, 1 none."""
+    """Pitch-set distance: 0 = confident match, grading up to 1 = unrelated.
+
+    A single note matches on its exact pitch. A chord only reaches 0 when the audio
+    contains **most of it** (at least two notes and half the chord): one shared pitch is
+    no evidence there — neighbouring chords share open strings and ring-out tones, and
+    single-pitch "matches" anchored chords onto the wrong strum (the cursor hung on chord
+    ends and skipped transitions). A partial chord overlap is a usable path hint (0.3)
+    but never an anchor; where chords can't anchor, the warp follows the notated
+    timeline, which accurate tabs make right.
+    """
     if not tab:
         return 0.6  # rest beat: weak match to anything (handled outside DTW normally)
-    if any(a == t for a in audio for t in tab):
+    shared = sum(1 for t in tab if t in audio)
+    if len(tab) == 1:
+        if shared:
+            return 0.0
+    elif shared >= max(2, (len(tab) + 1) // 2):
         return 0.0
+    elif shared:
+        return 0.3
     if any((a - t) % 12 == 0 for a in audio for t in tab):
         return 0.4
     if any(a % 12 == t % 12 for a in audio for t in tab):
