@@ -53,3 +53,18 @@ def test_chord_with_tied_members_keeps_real_pitches():
     assert len(beats) == 2
     assert beats[0].pitches == [45]  # the struck open A; tied strings match nothing
     assert not beats[0].is_rest
+
+
+def test_strum_repeats_are_not_matchable():
+    from app.tabsync import matchable_beats
+
+    # Four identical quick chords (a strum run) then a different chord: only the run's
+    # first strum and the new chord are matchable; single notes always are.
+    tex = ".\n:16 (5.1 5.2 7.3) (5.1 5.2 7.3) (5.1 5.2 7.3) (5.1 5.2 7.3) :8 (8.1 8.2) 7.3"
+    beats = parse_beats(tex)
+    m = matchable_beats(beats)
+    assert [b.index for b in m] == [0, 4, 5]
+
+    # Slow repeats (clear attacks) stay matchable: gap above the strum threshold.
+    tex2 = ".\n:2 (5.1 5.2 7.3) (5.1 5.2 7.3)"
+    assert len(matchable_beats(parse_beats(tex2))) == 2

@@ -439,6 +439,34 @@ def _anchors_of(pairs, groups, note_beats, trend=None, band=None):
     return _monotonic(anchors), matched
 
 
+def matchable_beats(beats: list[Beat]) -> list[Beat]:
+    """The beats worth matching against audio: notes and the FIRST chord of a strum run.
+
+    A strumming pattern repeats the same chord in quick succession, and its attacks are
+    soft and smeared in a recording — basic-pitch onsets there are unreliable, and the
+    repeats are mutually indistinguishable to a pitch DTW (identical pitch sets), so they
+    produced the hanging-then-jumping anchors. They are excluded from matching entirely:
+    the warp interpolates between surrounding anchors **on the notated timeline**, which is
+    exact now (it carries the source's tempo automations) — i.e. strummed sections keep tab
+    timing. The first strum of each run stays matchable to anchor the section's start.
+    """
+    out: list[Beat] = []
+    prev: Beat | None = None
+    for b in beats:
+        if b.is_rest:
+            continue
+        is_repeat = (
+            prev is not None
+            and len(b.pitches) >= 2
+            and set(b.pitches) == set(prev.pitches)
+            and (b.notated_time - prev.notated_time) <= 0.5
+        )
+        if not is_repeat:
+            out.append(b)
+        prev = b
+    return out
+
+
 def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int]],
                   note_beats: list[Beat]) -> dict | None:
     """Align the focus beats against one audio variant (mono / left / right isolate).
@@ -512,7 +540,7 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
     variants = []
     counts: list[tuple[int, int]] = []
     for tex in alphatexts:
-        nb = [b for b in parse_beats(tex) if not b.is_rest]
+        nb = matchable_beats(parse_beats(tex))
         bp = [b.pitches for b in nb]
         vl = _align_variant(stem_path, "left", bp, nb)
         vr = _align_variant(stem_path, "right", bp, nb)
@@ -560,7 +588,7 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
     free of the other part's onsets (the cross-part onsets were what drifted the cursor mid-song).
     A centre-panned part keeps mono (isolating would throw away too many of its onsets).
     """
-    note_beats = [b for b in parse_beats(focus_alphatex) if not b.is_rest]
+    note_beats = matchable_beats(parse_beats(focus_alphatex))
     if not note_beats:
         return {"version": 1, "anchors": [], "bar_times": [], "missing": []}
     beat_pitches = [b.pitches for b in note_beats]
