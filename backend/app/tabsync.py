@@ -549,6 +549,44 @@ def _assign_sides(counts: list[tuple[int, int]]) -> list[str]:
     return [p if owner.get(p) == i else "mono" for i, p in enumerate(prefs)]
 
 
+def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
+    """Realign weakly-anchored parts around the best-anchored part's warp.
+
+    Every part follows the SAME recording on an IDENTICAL notated grid (same tempo
+    automations), so the densest part's warp is a far tighter prior than identity for its
+    siblings. This is what rescues a sparse part whose own phrase repeats: the lead solo's
+    opening figure recurs 20+ seconds later, and inside a wide identity band the DTW is
+    free to pick the wrong repetition — the cursor then camps on the first solo note until
+    the recording catches up with the bad anchor. Beyond the reference's coverage the
+    trend extrapolates at slope 1 (tempo-exact continuation) instead of clamping flat.
+    """
+    scored = [(i, p[1]) for i, p in enumerate(picked) if p[1] and len(p[1]["anchors"]) >= 30]
+    if not scored:
+        return
+    ref_i, ref = max(scored, key=lambda s: len(s[1]["anchors"]))
+    anchors = ref["anchors"]
+    (n0, a0), (n1, a1) = anchors[0], anchors[-1]
+    span = 24 * 3600.0
+    trend = _monotonic(
+        [(n0 - span, max(0.0, a0 - span)), *anchors, (n1 + span, a1 + span)]
+    )
+    for i, (tex, chosen, side) in enumerate(picked):
+        if i == ref_i or chosen is None:
+            continue
+        nb = matchable_beats(parse_beats(tex))
+        if not nb:
+            continue
+        band = 6.0
+        pairs = _dtw_pairs_banded(chosen["groups"], nb, trend, band)
+        refined, matched = _anchors_of(pairs, chosen["groups"], nb, trend=trend, band=band)
+        if len(refined) >= 4:
+            picked[i] = (
+                tex,
+                {**chosen, "anchors": refined, "matched": matched, "n": len(matched)},
+                side,
+            )
+
+
 def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[dict]:
     """Align all parts on a stem, assigning each its own pan side competitively (see
     :func:`_assign_sides`). Returns one timing dict per part (same order), tagged with ``side``."""
@@ -564,7 +602,7 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
         counts.append(((vl or {"n": 0})["n"], (vr or {"n": 0})["n"]))
 
     sides = _assign_sides(counts)
-    out: list[dict] = []
+    picked: list[tuple[str, dict | None, str]] = []
     for (tex, by_side), side in zip(variants, sides):
         chosen = by_side[side]
         # A side owner whose isolated-audio alignment is much weaker than mono isn't
@@ -572,6 +610,12 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
         mono = by_side["mono"]
         if side != "mono" and mono and (chosen is None or chosen["n"] < 0.7 * mono["n"]):
             chosen, side = mono, "mono"
+        picked.append((tex, chosen, side))
+
+    _cross_refine(picked)
+
+    out: list[dict] = []
+    for tex, chosen, side in picked:
         if chosen is None:
             out.append({"version": 1, "anchors": [], "bar_times": [], "missing": [], "side": side})
             continue
