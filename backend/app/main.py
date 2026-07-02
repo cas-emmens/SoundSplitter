@@ -1,9 +1,16 @@
 """FastAPI app: Spotify auth, capture control, library, stems, files."""
 from __future__ import annotations
 
+import mimetypes
 import os
 import tempfile
 from pathlib import Path
+
+# Module scripts (alphaTab's synth worker/worklet, .mjs) refuse to run without a
+# JavaScript MIME type, and the Windows registry that Python's mimetypes consults
+# often maps .js to text/plain and doesn't know .mjs at all.
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware

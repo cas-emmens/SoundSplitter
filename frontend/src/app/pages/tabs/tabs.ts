@@ -253,7 +253,9 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
         playerMode: synth
           ? alphaTab.PlayerMode.EnabledSynthesizer
           : alphaTab.PlayerMode.EnabledExternalMedia,
-        soundFont: synth ? '/alphatab/soundfont/sonivox.sf3' : undefined,
+        // GeneralUser GS: far better GM bank than the stock sonivox (notably its guitars);
+        // parts pick their patch via the \instrument header (steel/clean/overdriven/…).
+        soundFont: synth ? '/alphatab/soundfont/GeneralUser-GS.sf2' : undefined,
         enableCursor: true,
         enableAnimatedBeatCursor: true,
         scrollMode: alphaTab.ScrollMode.Off,   // we autoscroll ourselves
