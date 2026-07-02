@@ -68,3 +68,13 @@ def test_strum_repeats_are_not_matchable():
     # Slow repeats (clear attacks) stay matchable: gap above the strum threshold.
     tex2 = ".\n:2 (5.1 5.2 7.3) (5.1 5.2 7.3)"
     assert len(matchable_beats(parse_beats(tex2))) == 2
+
+
+def test_bend_records_the_sounding_target_pitch():
+    from app.tabsync import parse_beats as pb
+
+    # 7 on string 3 bent a full step sounds as MIDI 55+7+2 = 64.
+    beats = pb(".\n:8 7.3{h b (0 4 0)} 5.3")
+    assert beats[0].pitches == [62]
+    assert beats[0].alts == [64]
+    assert beats[1].alts == []

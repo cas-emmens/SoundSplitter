@@ -33,6 +33,7 @@ class Beat:
     is_rest: bool = False
     part: int = 0         # which source tab this beat came from (master alignment); 0 = focus
     canon: float = 0.0    # canonical musical position = bar + fraction-within-bar (drift-robust)
+    alts: list[int] = field(default_factory=list)  # alternate sounding pitches (bend targets)
 
 
 @dataclass
@@ -159,12 +160,18 @@ def parse_beats(alphatex: str) -> list[Beat]:
                 pass
             continue
         if tok.startswith("{"):
-            # Beat property groups adjust the PREVIOUS beat's time; note-effect groups
-            # ({h}, {b (0 4)}, {v}, …) don't affect timing and fall through harmlessly.
+            # Beat property groups adjust the PREVIOUS beat's time; a bend group records
+            # the note's sounding TARGET pitch (a 7 bent full sounds as 9 — without this,
+            # bend-heavy passages have nothing the audio can match); other note-effect
+            # groups ({h}, {v}, …) don't affect matching or timing.
             if tok == "{d}" and last_secs:
                 t += last_secs / 2
             elif (m := re.match(r"^\{tu (\d+)\}$", tok)) and last_secs:
                 t -= last_secs * (1 - _TUPLET_FACTORS.get(int(m.group(1)), 1.0))
+            elif (m := re.match(r"^\{.*b \(([\d ]+)\)", tok)) and beats and beats[-1].pitches:
+                peak = max(int(v) for v in m.group(1).split())  # alphaTab quarter steps
+                if peak:
+                    beats[-1].alts.append(beats[-1].pitches[-1] + (peak + 1) // 2)
             continue
         secs = sec_per_whole / dur
         if tok == "r":
@@ -264,7 +271,7 @@ def group_onsets(events, window: float = 0.07) -> list[NoteGroup]:
 
 # --------------------------------------------------------------------------- alignment
 
-def _cost(audio: set[int], tab: list[int]) -> float:
+def _cost(audio: set[int], tab: list[int], alts: list[int] = ()) -> float:  # type: ignore[assignment]
     """Pitch-set distance: 0 = confident match, grading up to 1 = unrelated.
 
     A single note matches on its exact pitch. A chord only reaches 0 when the audio
@@ -277,7 +284,8 @@ def _cost(audio: set[int], tab: list[int]) -> float:
     """
     if not tab:
         return 0.6  # rest beat: weak match to anything (handled outside DTW normally)
-    shared = sum(1 for t in tab if t in audio)
+    pool = set(tab) | set(alts)  # a bent note may sound at its target pitch instead
+    shared = sum(1 for t in pool if t in audio)
     if len(tab) == 1:
         if shared:
             return 0.0
@@ -285,9 +293,9 @@ def _cost(audio: set[int], tab: list[int]) -> float:
         return 0.0
     elif shared:
         return 0.3
-    if any((a - t) % 12 == 0 for a in audio for t in tab):
+    if any((a - t) % 12 == 0 for a in audio for t in pool):
         return 0.4
-    if any(a % 12 == t % 12 for a in audio for t in tab):
+    if any(a % 12 == t % 12 for a in audio for t in pool):
         return 0.7
     return 1.0
 
@@ -417,7 +425,8 @@ def _dtw_pairs_banded(groups: list[NoteGroup], note_beats: list[Beat],
         prev, cur = D[i - 1], D[i]
         for j in range(1, m + 1):
             pen = 0.0 if abs(gi.time - expected[j - 1]) <= band else 5.0
-            cur[j] = _cost(gi.pitches, note_beats[j - 1].pitches) + pen + min(prev[j - 1], prev[j], cur[j - 1])
+            nb = note_beats[j - 1]
+            cur[j] = _cost(gi.pitches, nb.pitches, nb.alts) + pen + min(prev[j - 1], prev[j], cur[j - 1])
     i, j = int(np.argmin(D[:, m])), m
     pairs: list[tuple[int, int]] = []
     while i > 0 and j > 0:
@@ -443,7 +452,7 @@ def _anchors_of(pairs, groups, note_beats, trend=None, band=None):
     """
     anchors, matched = [], set()
     for ai, bj in pairs:
-        if _cost(groups[ai].pitches, note_beats[bj].pitches) != 0.0:
+        if _cost(groups[ai].pitches, note_beats[bj].pitches, note_beats[bj].alts) != 0.0:
             continue
         if trend is not None and band is not None:
             expected = _warp(note_beats[bj].notated_time, trend)
@@ -576,7 +585,7 @@ def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
         nb = matchable_beats(parse_beats(tex))
         if not nb:
             continue
-        band = 6.0
+        band = 3.0
         pairs = _dtw_pairs_banded(chosen["groups"], nb, trend, band)
         refined, matched = _anchors_of(pairs, chosen["groups"], nb, trend=trend, band=band)
         if len(refined) >= 4:

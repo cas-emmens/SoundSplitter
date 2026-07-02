@@ -108,15 +108,16 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     const src = this.editing() ? untracked(() => this.draft()) : this.selected()?.alphatex;
     if (!this.at || !src) return;
     try {
+      // Loading a new score STOPS alphaTab's transport, which pauses/rewinds the mixer
+      // through our handler — so capture the state first and suppress those transport
+      // commands during the switch; then re-arm so the cursor carries on mid-song.
+      const wasRolling = this.mix.isPlaying;
+      if (wasRolling) this.suppressTransportUntil = performance.now() + 1000;
       this.at.tex(src);
       // Re-apply layout once the host has its real width (it may be mid-layout on first paint):
       // recomputes bars-per-row from the container width and re-renders, so bars aren't tiny.
       requestAnimationFrame(() => this.applyLayout());
-      // Loading a new score resets alphaTab's transport; if the mixer is still rolling
-      // (tab switched mid-song), re-arm alphaTab so the cursor keeps following. Its play()
-      // may fire a stray seekTo(0) — suppressed below so the recording doesn't jump.
-      if (this.mix.isPlaying) {
-        this.suppressSeekUntil = performance.now() + 600;
+      if (wasRolling) {
         requestAnimationFrame(() => this.at?.play());
       }
       this.status.set('');
@@ -125,7 +126,7 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  private suppressSeekUntil = 0;
+  private suppressTransportUntil = 0;
 
   // --- audio cross-check hints ---
   private dismissed = signal<Set<number>>(new Set());
@@ -255,7 +256,7 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
         playbackRate: 1,
         masterVolume: 1,
         seekTo: (ms: number) => {
-          if (performance.now() < this.suppressSeekUntil) {
+          if (performance.now() < this.suppressTransportUntil) {
             // Transport reset from a mid-song tab switch — keep the real position instead.
             output.updatePosition(this.audioToNotated(mix.position()) * 1000);
             return;
@@ -263,7 +264,10 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
           mix.seek(ms / 1000); output.updatePosition(ms);
         },
         play: () => { mix.play(); this.playing.set(true); this.loop(); },
-        pause: () => { mix.pause(); this.playing.set(false); },
+        pause: () => {
+          if (performance.now() < this.suppressTransportUntil) return;  // mid-switch reset
+          mix.pause(); this.playing.set(false);
+        },
       };
       return;
     }
