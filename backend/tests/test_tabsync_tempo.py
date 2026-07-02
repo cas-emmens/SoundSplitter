@@ -65,9 +65,21 @@ def test_strum_repeats_are_not_matchable():
     m = matchable_beats(beats)
     assert [b.index for b in m] == [0, 4, 5]
 
-    # Slow repeats (clear attacks) stay matchable: gap above the strum threshold.
+    # Slow repeats stay matchable (they still shape the DTW path)…
     tex2 = ".\n:2 (5.1 5.2 7.3) (5.1 5.2 7.3)"
     assert len(matchable_beats(parse_beats(tex2))) == 2
+
+
+def test_ambiguous_repeats_may_match_but_never_anchor():
+    from app.tabsync import distinct_beat_ids, matchable_beats
+
+    # Identical beats near each other could each explain the other's audio — neither may
+    # anchor the warp; far enough apart they are distinguishable again.
+    near = matchable_beats(parse_beats(".\n:2 (5.1 5.2 7.3) (5.1 5.2 7.3) :4 7.3"))
+    ids = distinct_beat_ids(near)
+    assert [id(b) in ids for b in near] == [False, False, True]
+    far = matchable_beats(parse_beats("\\tempo 40\n.\n:2 (5.1 5.2 7.3) (5.1 5.2 7.3)"))
+    assert len(distinct_beat_ids(far)) == 2  # 3s apart -> both may anchor
 
 
 def test_bend_records_the_sounding_target_pitch():

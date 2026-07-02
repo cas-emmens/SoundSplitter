@@ -443,23 +443,29 @@ def _dtw_pairs_banded(groups: list[NoteGroup], note_beats: list[Beat],
 
 
 def _anchors_of(pairs, groups, note_beats, trend=None, band=None):
-    """Exact pitch matches from a DTW path, as (notated, audio) anchors.
+    """Exact pitch matches on locally *distinctive* beats, as (notated, audio) anchors.
 
     With ``trend``/``band``, only matches whose audio time lies within the band of the
     trend anchor the warp: the banded DTW's out-of-band penalty is soft (a hard wall can
     make the path infeasible), so a starved stretch — a part barely audible in the stem —
     can still take penalized far-away matches, and those must not steer the cursor.
+    Beats whose pitch-set repeats nearby (see :func:`distinct_beat_ids`) never anchor:
+    their evidence could belong to a different repetition.
     """
+    distinct = distinct_beat_ids(note_beats)
     anchors, matched = [], set()
     for ai, bj in pairs:
-        if _cost(groups[ai].pitches, note_beats[bj].pitches, note_beats[bj].alts) != 0.0:
+        beat = note_beats[bj]
+        if _cost(groups[ai].pitches, beat.pitches, beat.alts) != 0.0:
+            continue
+        matched.add(ai)
+        if id(beat) not in distinct:
             continue
         if trend is not None and band is not None:
-            expected = _warp(note_beats[bj].notated_time, trend)
+            expected = _warp(beat.notated_time, trend)
             if abs(groups[ai].time - expected) > band:
                 continue
-        anchors.append((note_beats[bj].notated_time, groups[ai].time))
-        matched.add(ai)
+        anchors.append((beat.notated_time, groups[ai].time))
     return _monotonic(anchors), matched
 
 
@@ -489,6 +495,27 @@ def matchable_beats(beats: list[Beat]) -> list[Beat]:
             out.append(b)
         prev = b
     return out
+
+
+def distinct_beat_ids(note_beats: list[Beat], window: float = 2.5) -> set[int]:
+    """Beats whose pitch-set does NOT recur in another beat within ``window`` seconds.
+
+    Only these may ANCHOR the warp. In a fast lick the same pitches cycle several times
+    inside the alignment band, and the DTW pinned bars onto the *previous* repetition (the
+    cursor ran a bar ahead and skipped the next run). Ambiguous beats still participate in
+    the DTW — they shape the path — but the warp is built from beats whose audio evidence
+    can only belong to them; repeat-heavy stretches interpolate on the notated timeline.
+    """
+    by_key: dict[frozenset[int], list[Beat]] = {}
+    for b in note_beats:
+        by_key.setdefault(frozenset(b.pitches), []).append(b)
+    ambiguous: set[int] = set()
+    for twins in by_key.values():
+        for i in range(1, len(twins)):
+            if twins[i].notated_time - twins[i - 1].notated_time <= window:
+                ambiguous.add(id(twins[i - 1]))
+                ambiguous.add(id(twins[i]))
+    return {id(b) for b in note_beats if id(b) not in ambiguous}
 
 
 def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int]],
