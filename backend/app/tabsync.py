@@ -904,7 +904,10 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
         for b in focus_beats:
             bar_start.setdefault(b.bar, b.notated_time)
         n_bars = (max(bar_start) + 1) if bar_start else 0
-        bar_times = [round(_warp(bar_start.get(i, 0.0), anchors), 4) for i in range(n_bars)]
+        # Bars outside the anchored region continue at slope 1 (see _pin_identity): a flat
+        # clamp gave every closing bar the last anchor's time (count-in read a 0s beat there).
+        trend = _pin_identity(anchors) if anchors else []
+        bar_times = [round(_warp(bar_start.get(i, 0.0), trend), 4) for i in range(n_bars)]
         missing_groups = [g for ai, g in enumerate(chosen["groups"]) if ai not in chosen["matched"]]
         res = AlignResult([], [], anchors, missing_groups)
         out.append({
@@ -947,7 +950,8 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
     for b in focus_beats:
         bar_start.setdefault(b.bar, b.notated_time)
     n_bars = (max(bar_start) + 1) if bar_start else 0
-    bar_times = [round(_warp(bar_start.get(i, 0.0), anchors), 4) for i in range(n_bars)]
+    trend = _pin_identity(anchors) if anchors else []
+    bar_times = [round(_warp(bar_start.get(i, 0.0), trend), 4) for i in range(n_bars)]
 
     missing_groups = [g for ai, g in enumerate(chosen["groups"]) if ai not in chosen["matched"]]
     res = AlignResult([], [], anchors, missing_groups)

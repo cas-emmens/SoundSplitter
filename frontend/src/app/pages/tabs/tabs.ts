@@ -293,9 +293,12 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   private audioToNotated(audioSec: number): number {
     const anchors = this.selected()?.timing?.anchors;
     if (!anchors || anchors.length < 2) return audioSec;
-    if (audioSec <= anchors[0][1]) return anchors[0][0];
+    // Beyond the anchored region, continue at slope 1 (tempo-exact) instead of clamping:
+    // a flat clamp froze the cursor on the last anchored note while the tab's final bars
+    // (an unanchorable fast run) played on — and parked it on the first anchor before it.
+    if (audioSec <= anchors[0][1]) return anchors[0][0] - (anchors[0][1] - audioSec);
     const last = anchors[anchors.length - 1];
-    if (audioSec >= last[1]) return last[0];
+    if (audioSec >= last[1]) return last[0] + (audioSec - last[1]);
     for (let k = 1; k < anchors.length; k++) {
       const [n0, a0] = anchors[k - 1];
       const [n1, a1] = anchors[k];
