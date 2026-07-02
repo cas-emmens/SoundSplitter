@@ -329,8 +329,70 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
-  togglePlay() { this.at?.playPause(); }
+  // --- count-in: four metronome ticks at the local tempo before the recording starts ---
+  countIn = signal(localStorage.getItem('tabs.countIn') !== '0');  // on by default
+  countingIn = signal(false);
+  private countInTimer = 0;
+  private tickCtx?: AudioContext;
+
+  toggleCountIn() {
+    this.countIn.update((v) => !v);
+    localStorage.setItem('tabs.countIn', this.countIn() ? '1' : '0');
+  }
+
+  togglePlay() {
+    if (this.countingIn()) { this.cancelCountIn(); return; }
+    if (!this.playing() && this.countIn()) { this.startCountIn(); return; }
+    this.at?.playPause();
+  }
+
+  private cancelCountIn() {
+    clearTimeout(this.countInTimer);
+    this.countingIn.set(false);
+  }
+
+  private startCountIn() {
+    const interval = this.beatInterval();
+    const ctx = (this.tickCtx ??= new AudioContext());
+    ctx.resume();
+    this.countingIn.set(true);
+    const t0 = ctx.currentTime + 0.05;
+    for (let i = 0; i < 4; i++) this.tick(ctx, t0 + i * interval, i === 0);
+    this.countInTimer = window.setTimeout(() => {
+      this.countingIn.set(false);
+      this.at?.playPause();
+    }, (0.05 + 4 * interval) * 1000);
+  }
+
+  /** One metronome tick: a short pitched blip (the first beat of the count is accented). */
+  private tick(ctx: AudioContext, when: number, accent: boolean) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = accent ? 1568 : 1047;  // G6 / C6
+    gain.gain.setValueAtTime(accent ? 0.5 : 0.35, when);
+    gain.gain.exponentialRampToValueAtTime(0.001, when + 0.08);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(when);
+    osc.stop(when + 0.1);
+  }
+
+  /** Seconds per beat at the CURRENT position — from the sync warp's bar times (real
+   *  performance tempo) when available, else the tab's notated tempo, else 120 bpm. */
+  private beatInterval(): number {
+    const bt = this.selected()?.timing?.bar_times;
+    const pos = this.mix.position();
+    if (bt && bt.length > 2) {
+      let k = bt.findIndex((t: number) => t > pos) - 1;
+      if (k < 0) k = pos >= bt[bt.length - 1] ? bt.length - 2 : 0;
+      const barSecs = bt[k + 1] - bt[k];
+      if (barSecs > 0.5 && barSecs < 12) return barSecs / 4;
+    }
+    const m = this.selected()?.alphatex?.match(/\\tempo\s+(\d+)/);
+    return 60 / (m ? parseInt(m[1], 10) : 120);
+  }
+
   stop() {
+    this.cancelCountIn();
     this.mix.seek(0);
     this.at?.stop();
     this.playing.set(false);
