@@ -91,16 +91,22 @@
   @if (showTabModal()) {
     <div class="modal-backdrop" (click)="closeTabModal()">
       <div class="modal" (click)="$event.stopPropagation()">
-        <h2>Add a tab</h2>
+        <h2>Add tabs</h2>
         <label>Couple to stem
           <select [ngModel]="tabStemId()" (ngModelChange)="tabStemId.set($event)">
             @for (st of s.stems; track st.id) { <option [ngValue]="st.id">{{ st.name }}</option> }
           </select>
         </label>
-        <label>Name
-          <input type="text" [ngModel]="tabName()" (ngModelChange)="tabName.set($event)"
-                 placeholder="e.g. Acoustic intro" />
+        <label class="tab-mode">
+          <input type="checkbox" [ngModel]="allGuitars()" (ngModelChange)="allGuitars.set($event)" />
+          All guitar tabs of the song (found automatically)
         </label>
+        @if (!allGuitars()) {
+          <label>Name
+            <input type="text" [ngModel]="tabName()" (ngModelChange)="tabName.set($event)"
+                   placeholder="e.g. Acoustic intro" />
+          </label>
+        }
         <label>Tab webpage URL
           <input type="text" [ngModel]="tabUrl()" (ngModelChange)="tabUrl.set($event)"
                  placeholder="https://www.songsterr.com/…" />
@@ -109,10 +115,17 @@
         <div class="modal-actions">
           <button (click)="closeTabModal()">Cancel</button>
           <button class="primary" [disabled]="creatingTab()" (click)="createTab()">
-            {{ creatingTab() ? 'Starting…' : 'Generate tab' }}
+            {{ creatingTab() ? 'Starting…' : allGuitars() ? 'Find & generate tabs' : 'Generate tab' }}
           </button>
         </div>
-        <p class="muted small">We capture the page and read the tab for you — it can take a few minutes.</p>
+        <p class="muted small">
+          @if (allGuitars()) {
+            Any of the song's Songsterr URLs works — every guitar part is discovered and
+            converted with its own tuning. This can take a few minutes.
+          } @else {
+            We capture the page and read the tab for you — it can take a few minutes.
+          }
+        </p>
       </div>
     </div>
   }

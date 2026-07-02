@@ -72,8 +72,10 @@ def _tuning_from_header(alphatex: str) -> dict[int, int]:
 def parse_beats(alphatex: str) -> list[Beat]:
     """Parse alphaTex into an ordered beat list with notated times (incl. rests).
 
-    Handles `\\tempo`, `\\ts`, `:N` durations, chords `(f.s f.s)`, single notes `f.s`, rests `r`,
-    and tolerates note-effect suffixes like `{h}` / ties `-.s`. Bar number increments at `|`.
+    Handles `\\tempo` (header AND mid-song changes — the notated timeline follows every
+    change, which is what keeps it near the recording on songs that shift tempo by section),
+    `\\ts`, `:N` durations, chords `(f.s f.s)`, single notes `f.s`, rests `r`, and tolerates
+    note-effect suffixes like `{h}` / ties `-.s`. Bar number increments at `|`.
     """
     tuning = _tuning_from_header(alphatex)
     lines = alphatex.splitlines()
@@ -83,6 +85,7 @@ def parse_beats(alphatex: str) -> list[Beat]:
     sec_per_whole = (60.0 / bpm) * 4.0
 
     toks = " ".join(lines[start:]).replace("|", " | ").split()
+    tempo_next = False  # the token after a mid-song \tempo is its BPM value
 
     def midi(tok: str) -> int | None:
         m = re.match(r"^[x\-]?\.?(\d+)\.(\d+)", tok) or re.match(r"^(\d+)\.(\d+)", tok)
@@ -97,10 +100,18 @@ def parse_beats(alphatex: str) -> list[Beat]:
         tok = toks[i]; i += 1
         if skip:
             skip -= 1; continue
+        if tempo_next:
+            tempo_next = False
+            if tok.isdigit():  # a mid-song tempo change: the timeline speeds up/slows here
+                sec_per_whole = (60.0 / int(tok)) * 4.0
+            continue
         if tok == "|":
             bar += 1; continue
         if tok.startswith("\\"):
-            skip = 2 if tok == "\\ts" else 1 if tok in ("\\tempo", "\\tuning") else 0
+            if tok == "\\tempo":
+                tempo_next = True
+                continue
+            skip = 2 if tok == "\\ts" else 1 if tok == "\\tuning" else 0
             continue
         if tok.startswith(":"):
             try:

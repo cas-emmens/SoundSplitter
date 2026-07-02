@@ -17,6 +17,10 @@ from . import db
 _stem_sync_locks: dict[int, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
+# Importing a whole song's guitar tabs at once starts several captures; each one is a headless
+# Chromium + OCR pass, so a couple in flight is plenty — more just thrashes CPU/RAM.
+_generation_gate = threading.Semaphore(2)
+
 
 def _stem_lock(stem_id: int) -> threading.Lock:
     with _locks_guard:
@@ -36,21 +40,36 @@ def _ensure_tesseract() -> None:
         os.environ["TESSERACT_CMD"] = candidate
 
 
-def _run(tab_id: int, url: str, title: str) -> None:
+def _run(tab_id: int, url: str, title: str, tuning: list[int] | None = None) -> None:
     try:
         _ensure_tesseract()
         # Heavy imports (OpenCV/Playwright) are deferred to the worker thread.
         from image_tabs import tabs_from_url
 
-        alphatex = tabs_from_url(url, title=title)
+        with _generation_gate:
+            alphatex = tabs_from_url(url, title=title, tuning=tuple(tuning) if tuning else None)
         if not alphatex.strip():
             db.set_tab_result(tab_id, status="error", error="no tab content recognized")
         else:
             db.set_tab_result(tab_id, alphatex=alphatex, status="done")
-            sync_timing(tab_id)  # align to the recording (cursor warp) once the tab exists
+            # Align to the recording (cursor warp) — but when a whole song's tabs are being
+            # generated together, only the LAST finisher syncs: the sync covers every done
+            # sibling on the stem anyway, and earlier partial syncs would be redone n times.
+            if not _has_pending_siblings(tab_id):
+                sync_timing(tab_id)
     except Exception as exc:  # noqa: BLE001 - record on the tab row and keep the server alive
         traceback.print_exc()
         db.set_tab_result(tab_id, status="error", error=str(exc))
+
+
+def _has_pending_siblings(tab_id: int) -> bool:
+    tab = db.get_tab(tab_id)
+    if not tab or not tab.get("stem_id"):
+        return False
+    return any(
+        t.get("stem_id") == tab["stem_id"] and t.get("status") == "pending" and t["id"] != tab_id
+        for t in db.get_tabs(tab["track_id"])
+    )
 
 
 def sync_timing(tab_id: int) -> None:
@@ -88,10 +107,14 @@ def sync_timing(tab_id: int) -> None:
         traceback.print_exc()
 
 
-def start(tab_id: int, url: str, title: str) -> None:
-    """Kick off generation for an already-created (pending) tab row."""
+def start(tab_id: int, url: str, title: str, tuning: list[int] | None = None) -> None:
+    """Kick off generation for an already-created (pending) tab row.
+
+    ``tuning`` (MIDI pitches, high string first — from the track's site metadata) is passed
+    through to the converter so the alphaTex carries the real string pitches.
+    """
     threading.Thread(
-        target=_run, args=(tab_id, url, title), name=f"tabgen-{tab_id}", daemon=True
+        target=_run, args=(tab_id, url, title, tuning), name=f"tabgen-{tab_id}", daemon=True
     ).start()
 
 

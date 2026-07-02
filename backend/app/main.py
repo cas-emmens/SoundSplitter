@@ -209,6 +209,44 @@ def create_tab(track_id: str, payload: dict) -> dict:
     return _tab_dict(db.get_tab(tab_id))
 
 
+@app.post("/api/songs/{track_id}/tabs/from-song")
+def create_tabs_from_song(track_id: str, payload: dict) -> dict:
+    """Discover every guitar tab of the song at ``url`` and generate them all.
+
+    Body: ``{url, stem_id?}``. One Songsterr URL is enough: the song's track list is read
+    from the page and each non-empty guitar part becomes its own tab (named after the
+    part, converted with its real tuning), all coupled to the same stem. Generation runs
+    in the background; the stem's timing sync fires once, after the last part finishes.
+    """
+    if db.get_song(track_id) is None:
+        raise HTTPException(404, "song not found")
+    url = (payload.get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "url is required")
+    from image_tabs import guitar_tracks
+
+    try:
+        tracks = guitar_tracks(url)
+    except Exception as exc:  # noqa: BLE001 - bad URL / site change / offline
+        raise HTTPException(422, f"could not read the song's track list: {exc}") from exc
+    if not tracks:
+        raise HTTPException(422, "no guitar tabs found at that URL")
+
+    tabs = []
+    for track in tracks:
+        name = _track_display_name(track)
+        tab_id = db.create_tab(track_id, name, payload.get("stem_id"), track.url)
+        tabgen.start(tab_id, track.url, name, tuning=list(track.tuning) if track.tuning else None)
+        tabs.append(_tab_dict(db.get_tab(tab_id)))
+    return {"tabs": tabs}
+
+
+def _track_display_name(track) -> str:
+    """A short tab name from the site's performer|gear|role line: the role, else instrument."""
+    role = track.name.rsplit("|", 1)[-1].strip() if track.name else ""
+    return role or track.instrument or f"Track {track.index}"
+
+
 @app.get("/api/songs/{track_id}/tabs")
 def list_tabs(track_id: str) -> dict:
     return {"tabs": [_tab_dict(t) for t in db.get_tabs(track_id)]}

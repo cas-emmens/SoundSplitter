@@ -54,6 +54,7 @@ export class PlayerPage implements OnInit, OnDestroy {
   showTabModal = signal(false);
   tabName = signal('');
   tabUrl = signal('');
+  allGuitars = signal(true); // default: one URL -> every guitar part of the song
   tabStemId = signal<number | null>(null);
   creatingTab = signal(false);
   tabError = signal('');
@@ -190,7 +191,9 @@ export class PlayerPage implements OnInit, OnDestroy {
   // --- tabs (generate from a webpage URL) ---
   openTabModal() {
     const stems = this.song()?.stems ?? [];
-    this.tabStemId.set(stems[0]?.id ?? null);
+    // Default to the guitar stem when there is one — that's what tabs follow.
+    const guitar = stems.find((st) => /guitar/i.test(st.name));
+    this.tabStemId.set(guitar?.id ?? stems[0]?.id ?? null);
     this.tabName.set('');
     this.tabUrl.set('');
     this.tabError.set('');
@@ -199,8 +202,25 @@ export class PlayerPage implements OnInit, OnDestroy {
   closeTabModal() { this.showTabModal.set(false); }
 
   createTab() {
-    const name = this.tabName().trim();
     const url = this.tabUrl().trim();
+    if (this.allGuitars()) {
+      if (!url) { this.tabError.set('URL is required.'); return; }
+      this.creatingTab.set(true);
+      this.api.createTabsFromSong(this.trackId, { url, stem_id: this.tabStemId() }).subscribe({
+        next: (r) => {
+          this.creatingTab.set(false);
+          this.showTabModal.set(false);
+          this.tabs.update((list) => [...list, ...r.tabs]);
+          for (const tab of r.tabs) this.pollTab(tab.id);
+        },
+        error: (e) => {
+          this.creatingTab.set(false);
+          this.tabError.set(e?.error?.detail || 'Could not read the song\'s track list.');
+        },
+      });
+      return;
+    }
+    const name = this.tabName().trim();
     if (!name || !url) { this.tabError.set('Name and URL are required.'); return; }
     this.creatingTab.set(true);
     this.api.createTab(this.trackId, { name, url, stem_id: this.tabStemId() }).subscribe({

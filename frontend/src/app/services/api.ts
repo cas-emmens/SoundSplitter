@@ -168,6 +168,10 @@ export class Api {
   createTab(trackId: string, body: { name: string; url: string; stem_id: number | null }) {
     return this.http.post<Tab>(`${this.base}/songs/${trackId}/tabs`, body);
   }
+  /** One song URL -> a tab per guitar part (discovered from the page's track list). */
+  createTabsFromSong(trackId: string, body: { url: string; stem_id: number | null }) {
+    return this.http.post<{ tabs: Tab[] }>(`${this.base}/songs/${trackId}/tabs/from-song`, body);
+  }
   getTab(tabId: number) {
     return this.http.get<Tab>(`${this.base}/tabs/${tabId}`);
   }
