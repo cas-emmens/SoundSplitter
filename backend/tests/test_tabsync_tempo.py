@@ -82,6 +82,73 @@ def test_ambiguous_repeats_may_match_but_never_anchor():
     assert len(distinct_beat_ids(far)) == 2  # 3s apart -> both may anchor
 
 
+def test_glide_onsets_finds_one_full_bend():
+    import numpy as np
+    from app.tabsync import _glide_onsets
+
+    hop = 0.0116
+    # pluck at base (0c) for 20 frames, ramp to +200c over 10, hold 30 — a full bend.
+    cents = np.array([0.0] * 20 + list(np.linspace(0, 200, 10)) + [200.0] * 30)
+    onsets = _glide_onsets(cents, hop, 200.0, 0.4)
+    assert len(onsets) == 1
+    assert onsets[0] <= 20 * hop + 1e-9  # anchored at the pluck, not the ramp
+
+
+def test_glide_onsets_rejects_vibrato_and_target_replucks():
+    import numpy as np
+    from app.tabsync import _glide_onsets
+
+    hop = 0.0116
+    wobble = 30 + 30 * np.sin(np.linspace(0, 20, 80))  # vibrato: never climbs near +130c
+    assert _glide_onsets(wobble, hop, 200.0, 0.4) == []
+    at_target = np.full(60, 200.0)  # already at the target: no near-base start
+    assert _glide_onsets(at_target, hop, 200.0, 0.4) == []
+
+
+def test_glide_onsets_reports_twin_bends_separately():
+    import numpy as np
+    from app.tabsync import _glide_onsets
+
+    hop = 0.0116
+    one = [0.0] * 12 + list(np.linspace(0, 200, 8)) + [200.0] * 15
+    gap = [float("nan")] * 60  # ~0.7s apart
+    cents = np.array(one + gap + one)
+    assert len(_glide_onsets(cents, hop, 200.0, 0.15)) == 2
+
+
+def test_merge_trusted_prefers_trusted_on_conflict():
+    from app.tabsync import _merge_trusted
+
+    trusted = [(10.0, 10.0), (20.0, 19.0)]
+    others = [(9.0, 11.0), (15.0, 14.0), (21.0, 18.5)]
+    merged = _merge_trusted(trusted, others)
+    # (9, 11) breaks monotonicity against (10, 10); (21, 18.5) against (20, 19).
+    assert merged == [(10.0, 10.0), (15.0, 14.0), (20.0, 19.0)]
+
+
+def test_bend_probes_skip_short_and_small_bends():
+    from app.tabsync import parse_beats, _bend_probes
+
+    # full bend with ring time -> probed; 80ms lick bend and half-step bend -> skipped.
+    tex = ".\n:2 15.1{b (0 4)} :32 15.1{b (0 4)} :2 15.1{b (0 2)}"
+    probes = _bend_probes(parse_beats(tex))
+    assert len(probes) == 1
+    beat, base, rise, dur = probes[0]
+    assert (base, rise) == (79, 2) and dur >= 0.15
+
+
+def test_prune_glides_drops_contested_and_inconsistent_claims():
+    from app.tabsync import _prune_glides
+
+    # Two probes (same base pitch) claiming one audio glide: ownership ambiguous, both go.
+    contested = [(10.0, 9.5, 74), (11.0, 9.6, 74), (20.0, 19.5, 79)]
+    assert _prune_glides(contested) == [(20.0, 19.5)]
+
+    # A wrong-occurrence match sits seconds off the trend its siblings agree on.
+    cands = [(10.0, 9.2, 79), (12.0, 11.3, 74), (15.0, 10.5, 76), (20.0, 19.4, 81)]
+    assert _prune_glides(cands) == [(10.0, 9.2), (12.0, 11.3), (20.0, 19.4)]
+
+
 def test_bend_records_the_sounding_target_pitch():
     from app.tabsync import parse_beats as pb
 

@@ -603,6 +603,224 @@ def _pin_identity(anchors: list[tuple[float, float]]) -> list[tuple[float, float
     return _monotonic([(n0 - a0, 0.0), *anchors, (n1 + span, a1 + span)])
 
 
+# ------------------------------------------------------------------- bend-glide anchoring
+
+def _bend_probes(beats: list[Beat]) -> list[tuple[Beat, int, int, float]]:
+    """Bend beats worth probing for a pitch glide: (beat, base_midi, rise_semitones, duration).
+
+    Only single-note bends of at least a whole step with ~150ms of ring time are probed:
+    smaller bends live inside vibrato territory, and the fast repeated-lick bends (80ms)
+    are both too short to glide-track and mutually ambiguous anyway.
+    """
+    out: list[tuple[Beat, int, int, float]] = []
+    for k, b in enumerate(beats):
+        if b.is_rest or len(b.pitches) != 1 or not b.alts:
+            continue
+        rise = max(b.alts) - b.pitches[0]
+        dur = beats[k + 1].notated_time - b.notated_time if k + 1 < len(beats) else 0.3
+        if rise >= 2 and dur >= 0.15:
+            out.append((b, b.pitches[0], rise, dur))
+    return out
+
+
+_signal_cache: dict[tuple[str, str], tuple] = {}
+
+
+def _part_signal(stem_path: str, side: str | None):
+    """The audio a part aligns against (mono load or azimuth isolate), cached per side."""
+    key = (stem_path, side or "mono")
+    if key not in _signal_cache:
+        import librosa
+
+        if side in ("left", "right"):
+            sig, sr = _isolate_pan(stem_path, side)
+        else:
+            sig, sr = librosa.load(stem_path, sr=22050)
+        if len(_signal_cache) > 3:
+            _signal_cache.clear()
+        _signal_cache[key] = (sig, sr)
+    return _signal_cache[key]
+
+
+def _glide_onsets(cents, hop_t: float, rise_cents: float, dur: float) -> list[float]:
+    """Times where a pluck-then-bend glide starts in a pYIN cents track (NaN = unvoiced).
+
+    A glide is a frame near the base pitch (below +40c) from which the pitch climbs to
+    near the bend target within ~1.6x the note's duration and stays up briefly. Vibrato
+    wobble fails the climb, a re-pluck already at the target pitch fails the near-base
+    start, and a run down to a different note breaks the walk.
+    """
+    import numpy as np
+
+    goal = max(rise_cents - 70.0, 0.55 * rise_cents)
+    hold = 0.45 * rise_cents
+    max_len = max(4, int(max(dur * 1.6, 0.25) / hop_t))
+    onsets: list[float] = []
+    n = len(cents)
+    for i in range(n):
+        c0 = cents[i]
+        if np.isnan(c0) or not (-120.0 < c0 < 40.0):
+            continue
+        gaps = 0
+        for j in range(i + 1, min(n, i + 1 + max_len)):
+            c = cents[j]
+            if np.isnan(c):
+                gaps += 1
+                if gaps > 3:
+                    break
+                continue
+            if c < -140.0:
+                break  # fell to another note: not a bend from this base
+            if c >= goal:
+                tail = cents[j + 1 : j + 6]
+                if all(np.isnan(x) or x >= hold for x in tail):
+                    # Onset ~ the pluck. Bound it so a same-pitch note still ringing
+                    # just before the bend can't drag the estimate a beat early.
+                    onsets.append(max(i * hop_t, j * hop_t - 1.2 * max(dur, 0.15)))
+                break
+    merged: list[float] = []
+    last: float | None = None
+    for t in sorted(onsets):  # one glide yields a run of valid start frames: keep its head
+        if last is not None and t - last <= 0.3:
+            last = t
+            continue
+        merged.append(t)
+        last = t
+    return merged
+
+
+def _glide_anchors(sig, sr, probes, trend, band: float) -> list[tuple[float, float]]:
+    """Physically-verified bend anchors ``(notated, audio-glide-start)``.
+
+    For each probe, pYIN tracks f0 in a small window around the beat's expected audio
+    time (from ``trend``), band-limited around the bend's frequencies, and the window is
+    accepted only if it contains EXACTLY one matching glide — two glides means twin bends
+    (a repeated lick) and the evidence could belong to either.
+    """
+    import librosa
+    import numpy as np
+
+    anchors: list[tuple[float, float, int]] = []
+    total = len(sig) / sr
+    for b, base, rise, dur in probes:
+        t_pred = _warp(b.notated_time, trend)
+        w0 = max(0.0, t_pred - band)
+        w1 = min(total, t_pred + band + max(dur, 0.3) + 0.2)
+        if w1 - w0 < 0.5:
+            continue
+        seg = sig[int(w0 * sr) : int(w1 * sr)]
+        base_hz = float(librosa.midi_to_hz(base))
+        # fill_na=None keeps pYIN's best f0 estimate on frames its Viterbi hesitates to
+        # call voiced — distorted/sustained bends read as barely-voiced and a NaN there
+        # cut the glide off mid-climb. The glide-shape test is the discriminator, not
+        # the voicing flag. The band is generous for the same reason: too narrow a range
+        # degrades the estimates near its edges.
+        f0, _vflag, _vprob = librosa.pyin(
+            seg, sr=sr, fmin=base_hz * 2 ** (-8 / 12),
+            fmax=base_hz * 2 ** ((rise + 6) / 12), frame_length=1024, hop_length=256,
+            fill_na=None,
+        )
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cents = 1200.0 * np.log2(f0 / base_hz)
+        found = _glide_onsets(cents, 256.0 / sr, rise * 100.0, dur)
+        if len(found) == 1:
+            anchors.append((b.notated_time, w0 + found[0], base))
+    return _prune_glides(anchors)
+
+
+def _prune_glides(cands: list[tuple[float, float, int]]) -> list[tuple[float, float]]:
+    """Reduce raw per-probe glide claims ``(notated, audio, base_midi)`` to trusted anchors.
+
+    Two probes claiming the SAME audio glide happens with same-pitch twin bends where
+    only one twin's glide is detectable — each probe's window sees exactly one glide and
+    calls it unique, but the ownership is ambiguous, so both claims are dropped. Then a
+    leave-one-out consistency check removes wrong-occurrence matches: every glide anchor
+    must sit near the trend its siblings agree on (a wrong occurrence is seconds off).
+    """
+    keep: list[tuple[float, float]] = []
+    for k, (nt, at, base) in enumerate(cands):
+        contested = any(
+            j != k and cands[j][2] == base and abs(cands[j][1] - at) < 0.25
+            for j in range(len(cands))
+        )
+        if not contested:
+            keep.append((nt, at))
+    anchors = _monotonic(keep)
+    while len(anchors) >= 3:
+        resid = [
+            abs(a - _warp(n, _pin_identity(anchors[:k] + anchors[k + 1 :])))
+            for k, (n, a) in enumerate(anchors)
+        ]
+        worst = max(range(len(anchors)), key=lambda k: resid[k])
+        if resid[worst] <= 1.25:
+            break
+        anchors.pop(worst)
+    return anchors
+
+
+def _merge_trusted(trusted, others) -> list[tuple[float, float]]:
+    """Merge anchor lists, keeping every ``trusted`` point: an *other* anchor is inserted
+    only where it stays strictly monotone with what's already in (trusted wins conflicts)."""
+    import bisect
+
+    out: list[tuple[float, float]] = sorted(trusted)
+    for nt, at in sorted(others):
+        i = bisect.bisect_left(out, (nt, at))
+        if i > 0 and (nt <= out[i - 1][0] or at <= out[i - 1][1]):
+            continue
+        if i < len(out) and (nt >= out[i][0] or at >= out[i][1]):
+            continue
+        out.insert(i, (nt, at))
+    return out
+
+
+def _glide_refine(stem_path: str, picked: list[tuple[str, dict | None, str]]) -> None:
+    """Re-anchor each part around physically-verified bend glides.
+
+    Pitch-identity anchors can land on the wrong repetition of a phrase — all their
+    evidence says is "these notes again". A measured glide (this pitch, bent THIS far,
+    over THIS duration, at the only spot in the window it occurs) cannot. Verified glides
+    become trusted anchors: existing anchors that contradict the glide-corrected trend
+    are evicted — with a tolerance that grows with distance from the nearest glide, so
+    dense well-anchored regions far from any bend are untouched — then pitch anchors are
+    re-harvested in a tight band around the corrected warp.
+    """
+    for i, (tex, chosen, side) in enumerate(picked):
+        if chosen is None or not chosen["anchors"]:
+            continue
+        beats = parse_beats(tex)
+        probes = _bend_probes(beats)
+        if not probes:
+            continue
+        sig, sr = _part_signal(stem_path, side)
+        # The window must cover the trend's plausible ERROR (a wrong-repetition anchor
+        # can put it ~3s off), or a probe centred on the corruption finds a twin bend,
+        # calls it unique, and confirms the bad trend. Wide windows are safe: glide
+        # probes are pitch-selective, and same-pitch twins self-reject via uniqueness.
+        glides = _glide_anchors(sig, sr, probes, _pin_identity(chosen["anchors"]), band=4.0)
+        if not glides:
+            continue
+        gtrend = _pin_identity(glides)
+        survivors = [
+            (nt, at) for nt, at in chosen["anchors"]
+            if abs(at - _warp(nt, gtrend))
+            <= 0.8 + 0.15 * min(abs(nt - g[0]) for g in glides)
+        ]
+        merged = _merge_trusted(glides, survivors)
+        nb = matchable_beats(beats)
+        own = _pin_identity(merged)
+        pairs = _dtw_pairs_banded(chosen["groups"], nb, own, 1.5)
+        refined, matched = _anchors_of(
+            pairs, chosen["groups"], nb, trend=own, band=1.5, ambiguity_window=2.0
+        )
+        final = _merge_trusted(glides, refined)
+        picked[i] = (
+            tex,
+            {**chosen, "anchors": final, "matched": matched, "n": len(matched)},
+            side,
+        )
+
+
 def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
     """Realign weakly-anchored parts around the best-anchored part's warp.
 
@@ -673,6 +891,7 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
         picked.append((tex, chosen, side))
 
     _cross_refine(picked)
+    _glide_refine(stem_path, picked)
 
     out: list[dict] = []
     for tex, chosen, side in picked:
