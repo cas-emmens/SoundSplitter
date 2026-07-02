@@ -1,4 +1,7 @@
-.tabs-page { display: flex; flex-direction: column; height: 100%; gap: 0.75rem; }
+/* Pin the page to the viewport so the SCORE pane (not the document) is the scroller: the
+   toolbar then never scrolls away, and the cursor autoscroll drives .score-scroll.
+   Offset = topbar (52px) + .content vertical padding (48px). */
+.tabs-page { display: flex; flex-direction: column; height: calc(100dvh - 104px); gap: 0.75rem; }
 .tabs-head { display: flex; flex-direction: column; gap: 0.25rem; }
 .tabs-head h2 { margin: 0; font-size: 1.2rem; }
 .tabs-head .artist { color: #9aa; font-weight: 400; }
@@ -49,8 +52,9 @@
 .status { color: #f0c674; font-size: 0.9rem; margin: 0; }
 .hint, .muted { color: #889; font-size: 0.9rem; }
 
-/* score (centre) + stem sidecar (right) */
-.tab-body { flex: 1; display: flex; gap: 0.75rem; min-height: 300px; }
+/* score (centre) + stem sidecar (right). min-height: 0 lets the flex child shrink below its
+   content so .score-scroll actually overflows and scrolls (otherwise the page grows instead). */
+.tab-body { flex: 1; display: flex; gap: 0.75rem; min-height: 0; }
 .score-scroll {
   flex: 1; overflow-y: auto; background: #fff; border-radius: 8px; padding: 0.5rem;
   position: relative;

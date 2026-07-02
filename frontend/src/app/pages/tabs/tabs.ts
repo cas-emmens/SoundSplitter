@@ -95,10 +95,10 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   }
 
   selectTab(id: number) {
+    // Keep the recording rolling (and the position) across tab switches: swapping from the
+    // intro tab to the lead mid-song just re-renders the score and the cursor carries on.
+    // The effect re-renders when `selected()` changes; renderSelected() re-arms playback.
     this.selectedId.set(id);
-    this.mix.seek(0);
-    this.playing.set(false);
-    // The effect re-renders when `selected()` changes — no direct render call needed here.
   }
 
   /** Render the selected tab — or the live draft while editing. No-op until alphaTab + a tab are
@@ -112,11 +112,20 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
       // Re-apply layout once the host has its real width (it may be mid-layout on first paint):
       // recomputes bars-per-row from the container width and re-renders, so bars aren't tiny.
       requestAnimationFrame(() => this.applyLayout());
+      // Loading a new score resets alphaTab's transport; if the mixer is still rolling
+      // (tab switched mid-song), re-arm alphaTab so the cursor keeps following. Its play()
+      // may fire a stray seekTo(0) — suppressed below so the recording doesn't jump.
+      if (this.mix.isPlaying) {
+        this.suppressSeekUntil = performance.now() + 600;
+        requestAnimationFrame(() => this.at?.play());
+      }
       this.status.set('');
     } catch {
       this.status.set('Could not render this tab.');
     }
   }
+
+  private suppressSeekUntil = 0;
 
   // --- audio cross-check hints ---
   private dismissed = signal<Set<number>>(new Set());
@@ -245,7 +254,14 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
         get backingTrackDuration() { return mix.duration * 1000; },
         playbackRate: 1,
         masterVolume: 1,
-        seekTo: (ms: number) => { mix.seek(ms / 1000); output.updatePosition(ms); },
+        seekTo: (ms: number) => {
+          if (performance.now() < this.suppressSeekUntil) {
+            // Transport reset from a mid-song tab switch — keep the real position instead.
+            output.updatePosition(this.audioToNotated(mix.position()) * 1000);
+            return;
+          }
+          mix.seek(ms / 1000); output.updatePosition(ms);
+        },
         play: () => { mix.play(); this.playing.set(true); this.loop(); },
         pause: () => { mix.pause(); this.playing.set(false); },
       };
