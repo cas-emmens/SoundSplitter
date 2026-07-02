@@ -69,13 +69,48 @@ def _tuning_from_header(alphatex: str) -> dict[int, int]:
     return out
 
 
+def _tokenize(body: str) -> list[str]:
+    """Split alphaTex music text into tokens, keeping each ``{…}`` property group whole.
+
+    Property groups can contain spaces and parentheses (``{b (0 4)}``, ``{tu 3}``); naive
+    whitespace splitting fed their fragments to the chord parser, which then consumed
+    everything — bar separators included — while hunting for a closing ``)``. A note's
+    attached groups (``5.3{h}{b (0 4)}``) come out as separate tokens after the note.
+    """
+    tokens: list[str] = []
+    i, n = 0, len(body)
+    while i < n:
+        c = body[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c == "{":
+            j = body.find("}", i)
+            j = n - 1 if j < 0 else j
+            tokens.append(body[i : j + 1])
+            i = j + 1
+            continue
+        j = i
+        while j < n and not body[j].isspace() and body[j] != "{":
+            j += 1
+        tokens.append(body[i:j])
+        i = j
+    return tokens
+
+
+# Tuplet factor: N notes in the time of the nearest lower power of two.
+_TUPLET_FACTORS = {3: 2 / 3, 5: 4 / 5, 6: 2 / 3, 7: 4 / 7, 9: 8 / 9}
+
+
 def parse_beats(alphatex: str) -> list[Beat]:
     """Parse alphaTex into an ordered beat list with notated times (incl. rests).
 
     Handles `\\tempo` (header AND mid-song changes — the notated timeline follows every
-    change, which is what keeps it near the recording on songs that shift tempo by section),
-    `\\ts`, `:N` durations, chords `(f.s f.s)`, single notes `f.s`, rests `r`, and tolerates
-    note-effect suffixes like `{h}` / ties `-.s`. Bar number increments at `|`.
+    change), `\\ts`, `:N` durations, `{d}` dots and `{tu N}` tuplets (they stretch/shrink
+    the beat they follow), chords `(f.s f.s)`, single notes `f.s`, rests `r`. Tied (`-.s`)
+    and dead (`x.s`) notes carry no reliable pitch to match, but their beats still occupy
+    time — they become silent (rest-like) beats rather than disappearing from the
+    timeline, which used to compress everything after them. Bar number increments at `|`.
     """
     tuning = _tuning_from_header(alphatex)
     lines = alphatex.splitlines()
@@ -84,18 +119,22 @@ def parse_beats(alphatex: str) -> list[Beat]:
     bpm = int(bpm_m.group(1)) if bpm_m else 120
     sec_per_whole = (60.0 / bpm) * 4.0
 
-    toks = " ".join(lines[start:]).replace("|", " | ").split()
+    toks = _tokenize(" ".join(lines[start:]).replace("|", " | "))
     tempo_next = False  # the token after a mid-song \tempo is its BPM value
 
     def midi(tok: str) -> int | None:
-        m = re.match(r"^[x\-]?\.?(\d+)\.(\d+)", tok) or re.match(r"^(\d+)\.(\d+)", tok)
+        m = re.match(r"^(\d+)\.(\d+)", tok)
         if not m:
             return None
         fret, string = int(m.group(1)), int(m.group(2))
         return tuning[string] + fret if string in tuning else None
 
+    def is_silent_note(tok: str) -> bool:
+        return re.match(r"^[x\-]\.\d+", tok) is not None  # tied (-.s) or dead (x.s)
+
     beats: list[Beat] = []
     skip, i, dur, t, bar, idx = 0, 0, 4, 0.0, 0, 0
+    last_secs = 0.0  # duration of the most recent beat, for {d}/{tu N} adjustments
     while i < len(toks):
         tok = toks[i]; i += 1
         if skip:
@@ -119,11 +158,23 @@ def parse_beats(alphatex: str) -> list[Beat]:
             except ValueError:
                 pass
             continue
+        if tok.startswith("{"):
+            # Beat property groups adjust the PREVIOUS beat's time; note-effect groups
+            # ({h}, {b (0 4)}, {v}, …) don't affect timing and fall through harmlessly.
+            if tok == "{d}" and last_secs:
+                t += last_secs / 2
+            elif (m := re.match(r"^\{tu (\d+)\}$", tok)) and last_secs:
+                t -= last_secs * (1 - _TUPLET_FACTORS.get(int(m.group(1)), 1.0))
+            continue
         secs = sec_per_whole / dur
         if tok == "r":
-            beats.append(Beat(idx, bar, [], t, is_rest=True)); idx += 1; t += secs; continue
+            beats.append(Beat(idx, bar, [], t, is_rest=True))
+            idx += 1; t += secs; last_secs = secs
+            continue
         pitches: list[int] = []
+        is_beat = False
         if tok.startswith("("):
+            is_beat = True
             inner = tok[1:]; done = inner.endswith(")")
             if (mm := midi(inner.rstrip(")"))) is not None:
                 pitches.append(mm)
@@ -132,10 +183,13 @@ def parse_beats(alphatex: str) -> list[Beat]:
                 if (mm := midi(u.rstrip(")"))) is not None:
                     pitches.append(mm)
         elif (mm := midi(tok)) is not None:
-            pitches.append(mm)
-        else:
+            pitches.append(mm); is_beat = True
+        elif is_silent_note(tok):
+            is_beat = True  # tied/dead: occupies its time, matches nothing
+        if not is_beat:
             continue  # unknown token, not a beat
-        beats.append(Beat(idx, bar, pitches, t, is_rest=not pitches)); idx += 1; t += secs
+        beats.append(Beat(idx, bar, pitches, t, is_rest=not pitches))
+        idx += 1; t += secs; last_secs = secs
     return beats
 
 
@@ -224,18 +278,24 @@ def _cost(audio: set[int], tab: list[int]) -> float:
 
 
 def _dtw_pairs(seq_a: list[set | list], seq_b: list[list[int]]) -> list[tuple[int, int]]:
-    """DTW match audio groups ``seq_a`` to tab beats ``seq_b`` by pitch cost; return path pairs."""
+    """Subsequence-DTW match audio groups ``seq_a`` to tab beats ``seq_b`` by pitch cost.
+
+    Audio before the part's first beat and after its last is skipped for FREE (``D[i,0]=0``
+    and the end picked as the best row of the last column): a part that rests through half
+    the song — a solo track, a slide overdub — aligns to its own section instead of being
+    forced to absorb every earlier onset into its first notes.
+    """
     import numpy as np
 
     n, m = len(seq_a), len(seq_b)
     D = np.full((n + 1, m + 1), 1e15)
-    D[0, 0] = 0.0
+    D[:, 0] = 0.0  # free leading-audio skip
     for i in range(1, n + 1):
         ai = seq_a[i - 1]
         prev, cur = D[i - 1], D[i]
         for j in range(1, m + 1):
             cur[j] = _cost(ai, seq_b[j - 1]) + min(prev[j - 1], prev[j], cur[j - 1])
-    i, j = n, m
+    i, j = int(np.argmin(D[:, m])), m  # free trailing-audio skip
     pairs: list[tuple[int, int]] = []
     while i > 0 and j > 0:
         pairs.append((i - 1, j - 1))
@@ -336,14 +396,14 @@ def _dtw_pairs_banded(groups: list[NoteGroup], note_beats: list[Beat],
     expected = [_warp(b.notated_time, trend) for b in note_beats]
     n, m = len(groups), len(note_beats)
     D = np.full((n + 1, m + 1), 1e15)
-    D[0, 0] = 0.0
+    D[:, 0] = 0.0  # subsequence DTW: leading/trailing audio is free (see _dtw_pairs)
     for i in range(1, n + 1):
         gi = groups[i - 1]
         prev, cur = D[i - 1], D[i]
         for j in range(1, m + 1):
             pen = 0.0 if abs(gi.time - expected[j - 1]) <= band else 5.0
             cur[j] = _cost(gi.pitches, note_beats[j - 1].pitches) + pen + min(prev[j - 1], prev[j], cur[j - 1])
-    i, j = n, m
+    i, j = int(np.argmin(D[:, m])), m
     pairs: list[tuple[int, int]] = []
     while i > 0 and j > 0:
         pairs.append((i - 1, j - 1))
@@ -358,12 +418,24 @@ def _dtw_pairs_banded(groups: list[NoteGroup], note_beats: list[Beat],
     return pairs
 
 
-def _anchors_of(pairs, groups, note_beats):
+def _anchors_of(pairs, groups, note_beats, trend=None, band=None):
+    """Exact pitch matches from a DTW path, as (notated, audio) anchors.
+
+    With ``trend``/``band``, only matches whose audio time lies within the band of the
+    trend anchor the warp: the banded DTW's out-of-band penalty is soft (a hard wall can
+    make the path infeasible), so a starved stretch — a part barely audible in the stem —
+    can still take penalized far-away matches, and those must not steer the cursor.
+    """
     anchors, matched = [], set()
     for ai, bj in pairs:
-        if _cost(groups[ai].pitches, note_beats[bj].pitches) == 0.0:
-            anchors.append((note_beats[bj].notated_time, groups[ai].time))
-            matched.add(ai)
+        if _cost(groups[ai].pitches, note_beats[bj].pitches) != 0.0:
+            continue
+        if trend is not None and band is not None:
+            expected = _warp(note_beats[bj].notated_time, trend)
+            if abs(groups[ai].time - expected) > band:
+                continue
+        anchors.append((note_beats[bj].notated_time, groups[ai].time))
+        matched.add(ai)
     return _monotonic(anchors), matched
 
 
@@ -371,21 +443,39 @@ def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int
                   note_beats: list[Beat]) -> dict | None:
     """Align the focus beats against one audio variant (mono / left / right isolate).
 
-    Two passes: a pitch-only DTW establishes the tempo trend, then a time-banded DTW re-aligns
-    within ~3/4 of a bar of that trend so the path can't run ahead onto a wrong-time onset.
+    The tab's notated timeline is the prior: it is built from the source's exact tempo
+    automations, so it tracks the recording within a few percent — a note notated at 356s
+    sounds near 356s, never at 196s. Pass one is therefore a time-banded DTW around the
+    **identity** trend with a generous band (it corrects nuance, not location — this is
+    what anchors parts that rest through most of the song, where a pitch-only bootstrap
+    latches onto any similar-sounding earlier section). Pass two re-aligns in a tight band
+    around pass one's own anchors.
     """
     groups = group_onsets(extract_note_events(stem_path, side=side))
     if not groups:
         return None
-    anchors, matched = _anchors_of(_dtw_pairs([g.pitches for g in groups], beat_pitches), groups, note_beats)
+
+    span = max(note_beats[-1].notated_time, groups[-1].time, 1.0)
+    identity = [(0.0, 0.0), (span, span)]
+    band = max(12.0, 0.06 * span)
+    anchors, matched = _anchors_of(
+        _dtw_pairs_banded(groups, note_beats, identity, band),
+        groups, note_beats, trend=identity, band=band,
+    )
 
     if len(anchors) >= 4:
         span_bars = max(1, note_beats[-1].bar - note_beats[0].bar)
         notated_bar = (note_beats[-1].notated_time - note_beats[0].notated_time) / span_bars
         slope = (anchors[-1][1] - anchors[0][1]) / max(1e-6, anchors[-1][0] - anchors[0][0])
-        band = max(1.0, 0.75 * notated_bar * slope)
-        banded_pairs = _dtw_pairs_banded(groups, note_beats, anchors, band)
-        b_anchors, b_matched = _anchors_of(banded_pairs, groups, note_beats)
+        tight = max(1.0, 0.75 * notated_bar * slope)
+        # Pin the trend to identity at both ends: outside its anchors a piecewise-linear
+        # warp clamps flat, which would let the head/tail regions drift arbitrarily far
+        # from the notated prior inside a formally-satisfied band.
+        trend = _monotonic([(0.0, 0.0)] + anchors + [(span, span)])
+        banded_pairs = _dtw_pairs_banded(groups, note_beats, trend, tight)
+        b_anchors, b_matched = _anchors_of(
+            banded_pairs, groups, note_beats, trend=trend, band=tight
+        )
         if len(b_anchors) >= 0.5 * len(anchors):  # keep the band only if it didn't gut the matches
             anchors, matched = b_anchors, b_matched
 
@@ -396,9 +486,11 @@ def _assign_sides(counts: list[tuple[int, int]]) -> list[str]:
     """Competitively assign each part a pan side from its (left, right) match counts.
 
     A follower part (e.g. a 12-string doubling the acoustic) matches the *louder* part's side
-    too, so raw counts mis-assign it. Instead each side goes to its strongest **ratio** claimant
-    (the part leaning that way hardest); other parts that preferred the same side are demoted to
-    the other side. So acoustic (leans left hardest) keeps left, the 12-string is pushed right.
+    too, so raw counts mis-assign it. Each side goes to its strongest **ratio** claimant (the
+    part leaning that way hardest). Every other part aligns against the plain **mono** mix:
+    with many parts on one stem (a full song can carry seven guitar tracks), demoting losers
+    to the *opposite* side — the old rule, built for two parts — pushed most parts onto
+    isolated audio they aren't in at all, and their warps came out garbage.
     """
     prefs = ["left" if l >= r else "right" for l, r in counts]
 
@@ -411,10 +503,7 @@ def _assign_sides(counts: list[tuple[int, int]]) -> list[str]:
         claimants = [i for i, p in enumerate(prefs) if p == side]
         if claimants:
             owner[side] = max(claimants, key=lambda i: ratio(i, side))
-    return [
-        p if owner.get(p) == i else ("right" if p == "left" else "left")
-        for i, p in enumerate(prefs)
-    ]
+    return [p if owner.get(p) == i else "mono" for i, p in enumerate(prefs)]
 
 
 def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[dict]:
@@ -427,13 +516,19 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
         bp = [b.pitches for b in nb]
         vl = _align_variant(stem_path, "left", bp, nb)
         vr = _align_variant(stem_path, "right", bp, nb)
-        variants.append((tex, vl, vr))
+        vm = _align_variant(stem_path, None, bp, nb)
+        variants.append((tex, {"left": vl, "right": vr, "mono": vm}))
         counts.append(((vl or {"n": 0})["n"], (vr or {"n": 0})["n"]))
 
     sides = _assign_sides(counts)
     out: list[dict] = []
-    for (tex, vl, vr), side in zip(variants, sides):
-        chosen = vl if side == "left" else vr
+    for (tex, by_side), side in zip(variants, sides):
+        chosen = by_side[side]
+        # A side owner whose isolated-audio alignment is much weaker than mono isn't
+        # really panned there — mono is the safer bed (mirrors compute_timing's guard).
+        mono = by_side["mono"]
+        if side != "mono" and mono and (chosen is None or chosen["n"] < 0.7 * mono["n"]):
+            chosen, side = mono, "mono"
         if chosen is None:
             out.append({"version": 1, "anchors": [], "bar_times": [], "missing": [], "side": side})
             continue
