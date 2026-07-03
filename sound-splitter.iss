@@ -1,4 +1,4 @@
-; Inno Setup script for the self-contained SoundSplitter installer.
+﻿; Inno Setup script for the self-contained SoundSplitter installer.
 ;
 ; We use Inno (not NSIS/Tauri's bundler) because the payload is >2GB and NSIS caps
 ; install data at ~2GB (32-bit offsets). Inno uses 64-bit LZMA2 and handles it.
@@ -9,7 +9,7 @@
 ; (build-installer.ps1 passes the version and signs the output.)
 
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.3.1"
 #endif
 #define AppName "SoundSplitter"
 #define AppExe "sound-splitter.exe"
