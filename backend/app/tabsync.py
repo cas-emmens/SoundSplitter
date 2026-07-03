@@ -522,6 +522,164 @@ def distinct_beat_ids(note_beats: list[Beat], window: float = 2.5) -> set[int]:
     return {id(b) for b in note_beats if id(b) not in ambiguous}
 
 
+def _bar_durations(alphatex: str):
+    """Audio-time -> the tab's local bar duration, for drumgrid's expected-bar prior
+    (identity time assumption: the tab's LOCAL tempo is accurate even when the song's
+    structure shifts sections around)."""
+    import bisect
+
+    starts: dict[int, float] = {}
+    for b in parse_beats(alphatex):
+        starts.setdefault(b.bar, b.notated_time)
+    times = sorted(starts.values())
+    durs = [t1 - t0 for t0, t1 in zip(times, times[1:])]
+
+    def expected(t: float) -> float | None:
+        if not durs:
+            return None
+        i = min(max(bisect.bisect_right(times, t) - 1, 0), len(durs) - 1)
+        return durs[i]
+
+    return expected
+
+
+def _structure_prior(stem_path: str, alphatexts: list[str]) -> list[tuple[float, float]] | None:
+    """Map notated bars onto the drum stem's measured bar grid (None without usable drums).
+
+    The banded pitch DTW can absorb tempo nuance but not whole-bar structure differences
+    (un-notated intro vamps, a rap verse, outro inserts): they push the true mapping far
+    outside any identity band, and the pitch DTW then latches self-similar groove bars
+    onto wrong repetitions inside it. Bars are the right unit for structure: the drum
+    grid measures the audio's bars, each gets a pitch profile from the (cached) note
+    events, and a bar-level DTW with gap moves maps notated bars onto them — extra audio
+    bars and skipped tab bars both allowed. Matched pairs (decent cost only) become the
+    fine alignment's prior trend. Validated on IRTM: discovered the un-notated De La
+    Soul verse (+28s) and landed the tab's last bar within one bar of the last onset.
+    """
+    from . import drumgrid
+
+    drums = drumgrid.sibling_drum_stem(stem_path)
+    if not drums:
+        return None
+    # Profile source: the densest part (most bars with struck notes) speaks for the
+    # song's shared measure grid.
+    densest = max(alphatexts, key=lambda tex: sum(1 for b in parse_beats(tex) if b.pitches))
+    grid = drumgrid.compute_grid(drums, expected_bar=_bar_durations(densest))
+    if len(grid.boundaries) < 8:
+        return None
+
+    events = extract_note_events(stem_path)
+    audio_bars: list[tuple[float, set[int]]] = []
+    for b0, b1 in zip(grid.boundaries, grid.boundaries[1:]):
+        if b1 - b0 > 8:  # gap between drum sections
+            continue
+        audio_bars.append((b0, {int(p) for (s, e, p, a) in events if b0 <= s < b1 and a >= 0.4}))
+
+    notated: dict[int, set[int]] = {}
+    bar_start: dict[int, float] = {}
+    for b in parse_beats(densest):
+        bar_start.setdefault(b.bar, b.notated_time)
+        notated.setdefault(b.bar, set()).update(b.pitches)
+    tab_bars = [(bar_start[i], notated.get(i, set())) for i in sorted(bar_start)]
+    if len(tab_bars) < 8:
+        return None
+
+    # Tab bars that the tab's own timeline places clearly outside the drum coverage
+    # (a drum-less acoustic intro / outro) are free to skip in the bar DTW; bars
+    # plausibly inside coverage are not, or the self-similar groove head gets discarded.
+    margin = 45.0
+    cov0, cov1 = audio_bars[0][0], audio_bars[-1][0]
+    free_lead = sum(1 for t, _ in tab_bars if t < cov0 - margin)
+    free_trail = sum(1 for t, _ in tab_bars if t > cov1 + margin)
+
+    pairs = _bar_dtw(audio_bars, tab_bars, free_lead=free_lead, free_trail=free_trail)
+    good = [(tab_bars[tj][0], audio_bars[ai][0]) for ai, tj, cost in pairs if cost <= 0.6]
+    if len(good) < 8:
+        return None
+    # Consistency pruning: a pair's shift (audio - notated) must agree with its local
+    # consensus. True structure is long plateaus; short inconsistent runs are boundary
+    # force-matches (tab bars just outside drum coverage taking weak matches inside it).
+    import statistics
+
+    shifts = [a - n for n, a in good]
+    w = 5
+    kept = [
+        (n, a)
+        for k, (n, a) in enumerate(good)
+        if abs(shifts[k] - statistics.median(shifts[max(0, k - w):k + w + 1])) <= 2.5
+    ]
+    # Edge trim: the FIRST/LAST pairs anchor the slope-1 extrapolation across everything
+    # outside drum coverage (_pin_identity), so a single boundary force-match there
+    # shifts a whole drum-less song half. An edge pair must agree with the consensus of
+    # its 10 inward neighbours; a real structure plateau (IRTM's +15s head) does.
+    def trim(seq: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        while len(seq) > 12:
+            edge = seq[0][1] - seq[0][0]
+            consensus = statistics.median(a - n for n, a in seq[1:11])
+            if abs(edge - consensus) <= 2.0:
+                break
+            seq = seq[1:]
+        return seq
+
+    kept = trim(kept)
+    kept = trim(kept[::-1])[::-1]
+    if len(kept) < 8:
+        return None
+    return _monotonic(kept)
+
+
+_GAP_AUDIO = 0.55   # bar-DTW: skip an audio bar (un-notated vamp / extra pass)
+_GAP_TAB = 0.65     # bar-DTW: skip a notated bar (the record skips it)
+
+
+def _bar_dtw(audio_bars, tab_bars, free_lead: int = 0, free_trail: int = 0) -> list[tuple[int, int, float]]:
+    """Bar-level DTW with gap moves; returns matched (audio_idx, tab_idx, cost).
+
+    ``free_lead`` / ``free_trail`` leading/trailing TAB bars are skippable for free: the
+    drum grid only covers drum sections, so tab bars the tab's own timeline places
+    clearly before/after that coverage (a drum-less acoustic intro, an outro) must not
+    be priced — pricing them made mis-matching Stairway's intro into the drum section
+    cheaper than skipping it (+124s derail). They must not be free UNCONDITIONALLY
+    either: a self-similar groove head then gets discarded and matched into the intro
+    vamp (IRTM lost its +15s head). Inner gaps stay paid: extra audio bars (un-notated
+    vamps) and skipped tab bars mid-song are real structure.
+    """
+    import numpy as np
+
+    def cost(a: set[int], t: set[int]) -> float:
+        if not t and not a:
+            return 0.1
+        if not t or not a:
+            return 0.6
+        return 1.0 - len(a & t) / max(len(t), 1)
+
+    na, nt = len(audio_bars), len(tab_bars)
+    D = np.full((na + 1, nt + 1), np.inf)
+    D[0, 0] = 0.0
+    for j in range(1, nt + 1):
+        D[0, j] = 0.0 if j <= free_lead else D[0, j - 1] + _GAP_TAB
+    D[1:, 0] = np.arange(1, na + 1) * _GAP_AUDIO
+    for i in range(1, na + 1):
+        ai = audio_bars[i - 1][1]
+        for j in range(1, nt + 1):
+            c = cost(ai, tab_bars[j - 1][1])
+            D[i, j] = min(D[i - 1, j - 1] + c, D[i - 1, j] + _GAP_AUDIO, D[i, j - 1] + _GAP_TAB)
+    end = [D[na, j] + max(0, (nt - j) - free_trail) * _GAP_TAB for j in range(1, nt + 1)]
+    pairs: list[tuple[int, int, float]] = []
+    i, j = na, int(np.argmin(end)) + 1
+    while i > 0 and j > 0:
+        c = cost(audio_bars[i - 1][1], tab_bars[j - 1][1])
+        if D[i, j] == D[i - 1, j - 1] + c:
+            pairs.append((i - 1, j - 1, c))
+            i, j = i - 1, j - 1
+        elif D[i, j] == D[i - 1, j] + _GAP_AUDIO:
+            i -= 1
+        else:
+            j -= 1
+    pairs.reverse()
+    return pairs
+
+
 def _estimate_offset(groups: list[NoteGroup], note_beats: list[Beat], limit: float = 45.0) -> float:
     """Global audio-vs-notated offset (a count-in / silent intro before the tab's bar 1).
 
@@ -551,7 +709,7 @@ def _estimate_offset(groups: list[NoteGroup], note_beats: list[Beat], limit: flo
 
 
 def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int]],
-                  note_beats: list[Beat]) -> dict | None:
+                  note_beats: list[Beat], prior: list[tuple[float, float]] | None = None) -> dict | None:
     """Align the focus beats against one audio variant (mono / left / right isolate).
 
     The tab's notated timeline is the prior: it is built from the source's exact tempo
@@ -562,18 +720,26 @@ def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int
     what anchors parts that rest through most of the song, where a pitch-only bootstrap
     latches onto any similar-sounding earlier section). Pass two re-aligns in a tight band
     around pass one's own anchors.
+
+    With a drum-grid ``prior`` (see :func:`_structure_prior`) pass one bands around THAT
+    trend instead, tightly (±1–2 bars of bar-mapping uncertainty): it already carries the
+    count-in and whole-bar structure differences the identity band can't reach.
     """
     groups = group_onsets(extract_note_events(stem_path, side=side))
     if not groups:
         return None
 
     span = max(note_beats[-1].notated_time, groups[-1].time, 1.0)
-    offset = _estimate_offset(groups, note_beats)
-    identity = [(0.0, offset), (span, span + offset)]
-    band = max(12.0, 0.06 * span)
+    if prior:
+        trend0 = _pin_identity(prior)
+        band = 4.0
+    else:
+        offset = _estimate_offset(groups, note_beats)
+        trend0 = [(0.0, offset), (span, span + offset)]
+        band = max(12.0, 0.06 * span)
     anchors, matched = _anchors_of(
-        _dtw_pairs_banded(groups, note_beats, identity, band),
-        groups, note_beats, trend=identity, band=band,
+        _dtw_pairs_banded(groups, note_beats, trend0, band),
+        groups, note_beats, trend=trend0, band=band,
     )
 
     if len(anchors) >= 4:
@@ -581,10 +747,11 @@ def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int
         notated_bar = (note_beats[-1].notated_time - note_beats[0].notated_time) / span_bars
         slope = (anchors[-1][1] - anchors[0][1]) / max(1e-6, anchors[-1][0] - anchors[0][0])
         tight = max(1.0, 0.75 * notated_bar * slope)
-        # Pin the trend to the offset identity at both ends: outside its anchors a
+        # Pin the trend to the pass-one prior at both ends: outside its anchors a
         # piecewise-linear warp clamps flat, which would let the head/tail regions drift
         # arbitrarily far from the notated prior inside a formally-satisfied band.
-        trend = _monotonic([(0.0, offset)] + anchors + [(span, span + offset)])
+        ends = [(0.0, _warp(0.0, trend0)), (span, _warp(span, trend0))]
+        trend = _monotonic([ends[0]] + anchors + [ends[1]])
         banded_pairs = _dtw_pairs_banded(groups, note_beats, trend, tight)
         b_anchors, b_matched = _anchors_of(
             banded_pairs, groups, note_beats, trend=trend, band=tight
@@ -898,14 +1065,15 @@ def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
 def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[dict]:
     """Align all parts on a stem, assigning each its own pan side competitively (see
     :func:`_assign_sides`). Returns one timing dict per part (same order), tagged with ``side``."""
+    prior = _structure_prior(stem_path, alphatexts)
     variants = []
     counts: list[tuple[int, int]] = []
     for tex in alphatexts:
         nb = matchable_beats(parse_beats(tex))
         bp = [b.pitches for b in nb]
-        vl = _align_variant(stem_path, "left", bp, nb)
-        vr = _align_variant(stem_path, "right", bp, nb)
-        vm = _align_variant(stem_path, None, bp, nb)
+        vl = _align_variant(stem_path, "left", bp, nb, prior)
+        vr = _align_variant(stem_path, "right", bp, nb, prior)
+        vm = _align_variant(stem_path, None, bp, nb, prior)
         variants.append((tex, {"left": vl, "right": vr, "mono": vm}))
         counts.append(((vl or {"n": 0})["n"], (vr or {"n": 0})["n"]))
 
@@ -964,9 +1132,10 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
         return {"version": 1, "anchors": [], "bar_times": [], "missing": []}
     beat_pitches = [b.pitches for b in note_beats]
 
-    mono = _align_variant(stem_path, None, beat_pitches, note_beats)
-    left = _align_variant(stem_path, "left", beat_pitches, note_beats)
-    right = _align_variant(stem_path, "right", beat_pitches, note_beats)
+    prior = _structure_prior(stem_path, [focus_alphatex])
+    mono = _align_variant(stem_path, None, beat_pitches, note_beats, prior)
+    left = _align_variant(stem_path, "left", beat_pitches, note_beats, prior)
+    right = _align_variant(stem_path, "right", beat_pitches, note_beats, prior)
     side = max((v for v in (left, right) if v), key=lambda v: v["n"], default=None)
     # Use the favoured pan side only if it retains most of the part's onsets (i.e. it really is
     # panned there); otherwise the part is centre-ish and mono is safer.

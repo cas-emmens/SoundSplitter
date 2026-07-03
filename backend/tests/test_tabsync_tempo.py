@@ -181,3 +181,29 @@ def test_estimate_offset_zero_when_no_shift_or_no_evidence():
     assert abs(_estimate_offset(aligned, beats)) < 0.5
     # Fewer than 8 exact matches: not enough evidence, stay on plain identity.
     assert _estimate_offset(aligned[:3], beats) == 0.0
+
+
+def test_bar_dtw_discovers_structure_gaps():
+    from app.tabsync import _bar_dtw
+
+    # Tab bars A B C D E; audio plays A B [2 un-notated vamp bars] C D E.
+    A, B, C, D, E = {40}, {45}, {50}, {55}, {60}
+    vamp = {47}
+    audio = [(float(i), p) for i, p in enumerate([A, B, vamp, vamp, C, D, E])]
+    tab = [(float(j), p) for j, p in enumerate([A, B, C, D, E])]
+    pairs = _bar_dtw(audio, tab)
+    matched = {(ai, tj) for ai, tj, c in pairs if c == 0.0}
+    assert {(0, 0), (1, 1), (4, 2), (5, 3), (6, 4)} <= matched
+
+
+def test_bar_dtw_free_lead_skips_uncovered_intro():
+    from app.tabsync import _bar_dtw
+
+    # Tab has a 3-bar intro the (drum-covered) audio never saw; free_lead skips it
+    # without pricing, so the map starts cleanly at the covered material.
+    intro, X, Y, Z = {30}, {50}, {55}, {60}
+    audio = [(0.0, X), (1.0, Y), (2.0, Z)]
+    tab = [(float(j), p) for j, p in enumerate([intro, intro, intro, X, Y, Z])]
+    pairs = _bar_dtw(audio, tab, free_lead=3)
+    exact = {(ai, tj) for ai, tj, c in pairs if c == 0.0}
+    assert exact == {(0, 3), (1, 4), (2, 5)}
