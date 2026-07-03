@@ -659,21 +659,95 @@ def _structure_prior(stem_path: str, alphatexts: list[str]) -> list[tuple[float,
     return kept
 
 
-def _with_prior_fallback(anchors, prior, margin: float = 5.0):
-    """Outside a part's own anchor coverage the warp follows the shared structure prior.
+def _first_onset(stem_path: str) -> float | None:
+    """The instrument's first sustained onset (another follows within 2s) — ear-grade
+    truth for where the tab's bar 1 sounds."""
+    onsets = [g for g in group_onsets(extract_note_events(stem_path)) if g.pitches]
+    if not onsets:
+        return None
+    return next((g.time for g, nxt in zip(onsets, onsets[1:]) if nxt.time - g.time < 2.0),
+                onsets[0].time)
+
+
+def _calibrate_prior(prior, anchors, head_onset: float | None = None):
+    """Shift the grid prior's phase onto the pitch-anchor consensus (sub-bar only).
+
+    The drum grid's downbeat detector locks onto the loudest onset position — on
+    backbeat music that is the SNARE: Stairway's map sat exactly half a bar from its
+    (ear-verified) pitch anchors, 39 of 61 residuals at -0.50 bars with mad 0.05. The
+    densest part's residual mode measures that phase error; shifting the prior by it
+    aligns grid pacing with the anchors instead of fighting them half a bar. Residuals
+    beyond ±0.6 bar are ignored: whole-bar offsets are wrong-repetition anchors (the
+    thing the calibrated grid is about to filter), not grid phase.
+
+    Anticipated-strum clusters can fake a phase error (IRTM's +0.5-bar cluster dragged
+    bar 1 past the verified guitar entry) — so when grid coverage reaches the tab's
+    head, a shift that moves the mapped tab start AWAY from the first onset is
+    rejected: the instrument's entry is ear-grade truth, the strum consensus is not.
+    """
+    import statistics
+
+    if not prior or not anchors:
+        return prior
+    bar = statistics.median(b[1] - a[1] for a, b in zip(prior, prior[1:])) or 2.0
+    trend = _pin_identity(list(prior))
+    res = [
+        (a - _warp(n, trend)) / bar
+        for n, a in anchors
+        if prior[0][0] - 5 <= n <= prior[-1][0] + 5
+    ]
+    res = [r for r in res if abs(r) <= 0.6]
+    if len(res) < 6:
+        return prior
+    buckets: dict[float, list[float]] = {}
+    for r in res:
+        buckets.setdefault(round(r * 4) / 4, []).append(r)
+    mode = max(buckets.values(), key=len)
+    shift = statistics.median(mode) * bar
+    shifted = [(n, a + shift) for n, a in prior]
+    if head_onset is not None and prior[0][0] <= 8 * bar:
+        before = abs(_warp(0.0, trend) - head_onset)
+        after = abs(_warp(0.0, _pin_identity(shifted)) - head_onset)
+        if after > before + 0.05:
+            return prior
+    return shifted
+
+
+def _with_prior_fallback(anchors, prior):
+    """Reconcile a part's pitch anchors with the (phase-calibrated) drum-grid prior.
 
     A song's parts share one measure grid, so they share one offset curve (Cas's
-    consistency check). A sparse part — the lead whose first anchor sits mid-song —
-    otherwise slope-1 extrapolates its head from whatever plateau its first anchor is
-    on: IRTM's lead cursor started ~9 bars late while the rhythm started ~4 late.
+    consistency check) — outside a part's own anchor coverage the warp follows the
+    prior (the lead otherwise slope-1 extrapolated its head from a mid-song plateau).
+
+    Inside coverage, anchors that sit ~a whole bar from the calibrated grid are
+    wrong-repetition locks — a repeating lick matches its neighbour bar perfectly, so
+    the wrong cluster is dense and internally consistent (IRTM's lead ran one measure
+    ahead through the very stretches Cas named). They are dropped, and grid pairs fill
+    the holes so pacing follows the measured bars instead of gliding between distant
+    or anticipated anchors.
     """
+    import statistics
+
     if not anchors:
         return list(prior or [])
     if not prior:
         return list(anchors)
-    lo, hi = anchors[0][0] - margin, anchors[-1][0] + margin
-    merged = [p for p in prior if p[0] < lo or p[0] > hi] + list(anchors)
-    return _monotonic(sorted(merged))
+    bar = statistics.median(b[1] - a[1] for a, b in zip(prior, prior[1:])) or 2.0
+    trend = _pin_identity(list(prior))
+    lo, hi = prior[0][0], prior[-1][0]
+    kept = [
+        (n, a) for n, a in anchors
+        # Only gate INSIDE grid coverage: outside it the trend is a blind slope-1
+        # extrapolation, no basis for dropping real anchors (12-String-1 lost its
+        # first anchor to it).
+        if not (lo <= n <= hi) or abs(a - _warp(n, trend)) <= 0.5 * bar
+    ]
+    filler = [
+        p for p in prior
+        if not any(abs(n - p[0]) <= 1.0 * bar for n, _ in kept)
+    ]
+    return _monotonic(sorted(kept + filler))
 
 
 _GAP_AUDIO = 0.55   # bar-DTW: skip an audio bar (un-notated vamp / extra pass)
@@ -1139,6 +1213,12 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
     _cross_refine(picked)
     _glide_refine(stem_path, picked)
 
+    # Grid phase calibration from the densest part's anchors (see _calibrate_prior) —
+    # one shared correction, so every part reconciles against the same calibrated grid.
+    best = max((c for _, c, _ in picked if c), key=lambda c: len(c["anchors"]), default=None)
+    if prior and best:
+        prior = _calibrate_prior(prior, best["anchors"], head_onset=_first_onset(stem_path))
+
     out: list[dict] = []
     for tex, chosen, side in picked:
         if chosen is None:
@@ -1191,6 +1271,8 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
     if chosen is None:
         return {"version": 1, "anchors": [], "bar_times": [], "missing": []}
 
+    if prior:
+        prior = _calibrate_prior(prior, chosen["anchors"], head_onset=_first_onset(stem_path))
     anchors = _with_prior_fallback(chosen["anchors"], prior)
     focus_beats = parse_beats(focus_alphatex)
     bar_start: dict[int, float] = {}
