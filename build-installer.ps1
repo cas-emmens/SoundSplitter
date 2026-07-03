@@ -156,6 +156,22 @@ Ok "Backend staged"
 Set-Content (Join-Path $payload "variant") $variant -NoNewline
 Ok "Variant marker: $variant"
 
+# --- 7b. Prune runtime junk: bytecode caches + package test suites ------------
+# Python regenerates __pycache__ on first run (install dir is user-writable); package
+# "tests" dirs are never imported at runtime. The CUDA payload crossed GitHub's 2 GiB
+# release-asset cap without this (2149.7MB at v0.3.1).
+Step "Pruning payload junk (__pycache__, package tests)"
+$sitePkgs = Join-Path $pyDir "Lib\site-packages"
+Get-ChildItem $sitePkgs -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+foreach ($pkg in @("networkx", "scipy", "sklearn", "sympy", "pandas")) {
+    $pkgDir = Join-Path $sitePkgs $pkg
+    if (Test-Path $pkgDir) {
+        Get-ChildItem $pkgDir -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object Name -eq "tests" | Remove-Item -Recurse -Force
+    }
+}
+Ok "Payload pruned"
+
 # --- 8. Assert the payload is complete (guards against a half-built bundle) ----
 Step "Verifying payload completeness"
 $required = @(
