@@ -34,6 +34,7 @@ interface BeatSpot {
           <input type="range" min="40" max="400" step="10" [ngModel]="pps()" (ngModelChange)="setZoom($event)">
         </label>
         <label class="dim"><input type="checkbox" [(ngModel)]="follow"> follow</label>
+        <button (click)="undo()" [disabled]="!undoCount()" title="Undo last anchor edit (Ctrl+Z)">↩ Undo</button>
         <span class="status">{{ status() }}</span>
         <span class="hint dim">click note ↔ anchor · drag or ←/→ to nudge (shift = coarse) · Del removes a manual anchor</span>
       </div>
@@ -73,14 +74,15 @@ interface BeatSpot {
     .toolbar .status { color: #8f8; min-width: 70px; }
     .dim { color: #889; font-size: 12px; }
     .hint { margin-left: auto; }
-    .tabstrip { flex: 1 1 45%; min-height: 180px; overflow: auto hidden; background: #101218;
-                border-radius: 8px; }
+    /* White panel like the tabs page's score-scroll: alphaTab draws black glyphs. */
+    .tabstrip { flex: 0 1 auto; max-height: 46%; min-height: 160px; overflow: auto;
+                background: #fff; border-radius: 8px; }
     .atwrap { position: relative; width: max-content; min-width: 100%; }
     .note-hl { position: absolute; background: rgba(108,140,255,0.3);
                outline: 2px solid #6c8cff; border-radius: 3px; pointer-events: none; }
     .tab-cursor { position: absolute; top: 0; bottom: 0; width: 2px; background: #ffd166;
                   pointer-events: none; display: none; }
-    .wave { flex: 1 1 55%; min-height: 200px; overflow: auto hidden; background: #0c0e13;
+    .wave { flex: 1 1 auto; min-height: 200px; overflow: auto hidden; background: #0c0e13;
             border-radius: 8px; position: relative; }
     .spacer { position: relative; height: 100%; }
     canvas { position: sticky; left: 0; display: block; height: 100%; }
@@ -138,6 +140,9 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   private raf = 0;
   private saveTimer = 0;
   private drag: { idx: number; moved: boolean } | null = null;
+  undoCount = signal(0);
+  private undoStack: { anchors: [number, number][]; manual: string[] }[] = [];
+  private lastNudge = { idx: -1, at: 0 };
 
   get duration() { return this.buffer?.duration ?? 0; }
 
@@ -240,6 +245,7 @@ export class TimingEditorPage implements OnInit, OnDestroy {
     if (idx != null) {
       this.select(idx);
     } else {
+      this.pushUndo();
       const audio = this.notatedToAudio(best.notated);
       const list = [...this.anchors(), [best.notated, audio] as [number, number]]
         .sort((p, q) => p[0] - q[0]);
@@ -257,6 +263,27 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   }
 
   // ---------------------------------------------------------------- anchors
+  /** Snapshot the anchor state before a mutation, for Ctrl+Z / the Undo button. */
+  private pushUndo() {
+    this.undoStack.push({
+      anchors: this.anchors().map((a) => [...a] as [number, number]),
+      manual: [...this.manualKeys()],
+    });
+    if (this.undoStack.length > 50) this.undoStack.shift();
+    this.undoCount.set(this.undoStack.length);
+  }
+
+  undo() {
+    const s = this.undoStack.pop();
+    if (!s) return;
+    this.undoCount.set(this.undoStack.length);
+    this.anchors.set(s.anchors);
+    this.manualKeys.set(new Set(s.manual));
+    this.select(null);
+    this.drawWave();
+    this.queueSave();
+  }
+
   isManual(a: [number, number]) { return this.manualKeys().has(a[0].toFixed(4)); }
   private markManual(notated: number) {
     const keys = new Set(this.manualKeys());
@@ -302,6 +329,7 @@ export class TimingEditorPage implements OnInit, OnDestroy {
     this.drag = { idx, moved: false };
     const move = (e: PointerEvent) => {
       if (!this.drag) return;
+      if (!this.drag.moved) this.pushUndo();  // one undo step per drag
       this.drag.moved = true;
       const spacer = this.waveScroll().nativeElement;
       const rect = spacer.getBoundingClientRect();
@@ -332,6 +360,11 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   }
 
   private onKey = (ev: KeyboardEvent) => {
+    if (ev.ctrlKey && ev.key.toLowerCase() === 'z') {
+      ev.preventDefault();
+      this.undo();
+      return;
+    }
     if (ev.code === 'Space' && !(ev.target as HTMLElement)?.closest('input')) {
       ev.preventDefault();
       this.togglePlay();
@@ -341,12 +374,17 @@ export class TimingEditorPage implements OnInit, OnDestroy {
     if (idx == null) return;
     if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
       ev.preventDefault();
+      // Coalesce a run of nudges on one anchor into a single undo step.
+      const now = performance.now();
+      if (this.lastNudge.idx !== idx || now - this.lastNudge.at > 800) this.pushUndo();
+      this.lastNudge = { idx, at: now };
       const step = (ev.shiftKey ? 0.1 : 0.02) * (ev.key === 'ArrowLeft' ? -1 : 1);
       this.moveAnchor(idx, this.anchors()[idx][1] + step);
       this.queueSave();
     } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
       const a = this.anchors()[idx];
       if (!this.isManual(a)) { this.status.set('engine anchor'); return; }
+      this.pushUndo();
       const keys = new Set(this.manualKeys());
       keys.delete(a[0].toFixed(4));
       this.manualKeys.set(keys);
