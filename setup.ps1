@@ -127,6 +127,15 @@ Ok "PyTorch installed"
 if ($LASTEXITCODE -ne 0) { throw "requirements.txt install failed." }
 Ok "Backend dependencies installed"
 
+# basic-pitch (tab timing sync). Its tensorflow dependency marker is unsatisfiable on
+# Python >= 3.12 (tensorflow<2.15.1 wheels stop at 3.11), but the package runs fine on
+# its ONNX backend - install it depless with onnxruntime + its light deps explicitly.
+& $venvPy -m pip install onnxruntime "resampy>=0.2.2,<0.4.3" mir-eval pretty-midi
+if ($LASTEXITCODE -ne 0) { throw "basic-pitch dependency install failed." }
+& $venvPy -m pip install --no-deps basic-pitch
+if ($LASTEXITCODE -ne 0) { throw "basic-pitch install failed." }
+Ok "basic-pitch installed"
+
 # --- tab generation: image-tabs library + headless browser + OCR -------------
 Step "Setting up tab generation (image-tabs: web capture + OCR)"
 

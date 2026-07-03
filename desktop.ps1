@@ -50,7 +50,7 @@ function Test-Provisioned {
     $venvPy = Join-Path $root "backend\.venv\Scripts\python.exe"
     if (-not (Test-Path $venvPy)) { return $false }
     # backend python deps, including the image-tabs tab-generation stack
-    & $venvPy -c "import torch, demucs, fastapi, image_tabs, cv2, pytesseract, playwright" *> $null
+    & $venvPy -c "import torch, demucs, fastapi, image_tabs, cv2, pytesseract, playwright, basic_pitch" *> $null
     if ($LASTEXITCODE -ne 0) { return $false }
     # Tesseract OCR (on PATH or extracted into LocalAppData)
     $tessExe = Join-Path $env:LOCALAPPDATA "Tesseract-OCR\tesseract.exe"

@@ -87,6 +87,17 @@ if ((Test-Path $canvas) -and (Test-Path $imgTabs)) {
     Ok "Tab-generation libraries installed"
 } else { Die "image-tabs / canvas-to-image not found next to sound-splitter." }
 
+# basic-pitch (tab timing sync). Its tensorflow dependency marker is unsatisfiable on
+# Python 3.13 (tensorflow<2.15.1 has no 3.13 wheels), but the package runs fine on its
+# ONNX backend - install it depless with onnxruntime + its light deps provided explicitly.
+& $py -m pip install onnxruntime "resampy>=0.2.2,<0.4.3" mir-eval pretty-midi
+if ($LASTEXITCODE -ne 0) { Die "basic-pitch dependency install failed." }
+& $py -m pip install --no-deps basic-pitch
+if ($LASTEXITCODE -ne 0) { Die "basic-pitch install failed." }
+& $py -c "from basic_pitch import ICASSP_2022_MODEL_PATH; assert ICASSP_2022_MODEL_PATH.suffix == '.onnx'"
+if ($LASTEXITCODE -ne 0) { Die "basic-pitch did not select the ONNX model." }
+Ok "basic-pitch (ONNX backend) installed"
+
 # --- 3. Playwright Chromium ---------------------------------------------------
 Step "Installing Playwright Chromium into the bundle"
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $runtime "ms-playwright"
@@ -152,6 +163,8 @@ $required = @(
     "$runtime\ms-playwright",
     "$runtime\torch",
     "$runtime\tesseract\tesseract.exe",
+    "$runtime\python\Lib\site-packages\basic_pitch",
+    "$runtime\python\Lib\site-packages\onnxruntime",
     "$payload\frontend-dist\index.html",
     "$beDst\run.py",
     "$beDst\app\main.py"
