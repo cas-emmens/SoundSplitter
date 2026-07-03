@@ -522,6 +522,34 @@ def distinct_beat_ids(note_beats: list[Beat], window: float = 2.5) -> set[int]:
     return {id(b) for b in note_beats if id(b) not in ambiguous}
 
 
+def _estimate_offset(groups: list[NoteGroup], note_beats: list[Beat], limit: float = 45.0) -> float:
+    """Global audio-vs-notated offset (a count-in / silent intro before the tab's bar 1).
+
+    A recording that opens with material not in the tab shifts EVERY beat by the same
+    amount, and the identity prior spends its band margin on that shift before it can
+    absorb real nuance. Vote ``group time - beat notated time`` over exact pitch matches
+    of distinctive beats: on a structure-true tab, the whole song votes the same shift,
+    so the histogram mode is the count-in and stray coincidental matches are outvoted.
+    """
+    distinct = distinct_beat_ids(note_beats)
+    votes: list[float] = []
+    for b in note_beats:
+        if id(b) not in distinct or not b.pitches:
+            continue
+        for g in groups:
+            d = g.time - b.notated_time
+            if -limit <= d <= limit and _cost(g.pitches, b.pitches, b.alts) == 0.0:
+                votes.append(d)
+    if len(votes) < 8:
+        return 0.0
+    bins: dict[int, int] = {}
+    for d in votes:
+        bins[int(d // 1.0)] = bins.get(int(d // 1.0), 0) + 1
+    mode = max(bins, key=lambda k: bins[k])
+    near = sorted(d for d in votes if mode - 1.0 <= d <= mode + 2.0)
+    return near[len(near) // 2]
+
+
 def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int]],
                   note_beats: list[Beat]) -> dict | None:
     """Align the focus beats against one audio variant (mono / left / right isolate).
@@ -529,7 +557,8 @@ def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int
     The tab's notated timeline is the prior: it is built from the source's exact tempo
     automations, so it tracks the recording within a few percent — a note notated at 356s
     sounds near 356s, never at 196s. Pass one is therefore a time-banded DTW around the
-    **identity** trend with a generous band (it corrects nuance, not location — this is
+    **identity** trend — shifted by the estimated global offset, so a recording's count-in
+    doesn't eat the band — with a generous band (it corrects nuance, not location — this is
     what anchors parts that rest through most of the song, where a pitch-only bootstrap
     latches onto any similar-sounding earlier section). Pass two re-aligns in a tight band
     around pass one's own anchors.
@@ -539,7 +568,8 @@ def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int
         return None
 
     span = max(note_beats[-1].notated_time, groups[-1].time, 1.0)
-    identity = [(0.0, 0.0), (span, span)]
+    offset = _estimate_offset(groups, note_beats)
+    identity = [(0.0, offset), (span, span + offset)]
     band = max(12.0, 0.06 * span)
     anchors, matched = _anchors_of(
         _dtw_pairs_banded(groups, note_beats, identity, band),
@@ -551,10 +581,10 @@ def _align_variant(stem_path: str, side: str | None, beat_pitches: list[list[int
         notated_bar = (note_beats[-1].notated_time - note_beats[0].notated_time) / span_bars
         slope = (anchors[-1][1] - anchors[0][1]) / max(1e-6, anchors[-1][0] - anchors[0][0])
         tight = max(1.0, 0.75 * notated_bar * slope)
-        # Pin the trend to identity at both ends: outside its anchors a piecewise-linear
-        # warp clamps flat, which would let the head/tail regions drift arbitrarily far
-        # from the notated prior inside a formally-satisfied band.
-        trend = _monotonic([(0.0, 0.0)] + anchors + [(span, span)])
+        # Pin the trend to the offset identity at both ends: outside its anchors a
+        # piecewise-linear warp clamps flat, which would let the head/tail regions drift
+        # arbitrarily far from the notated prior inside a formally-satisfied band.
+        trend = _monotonic([(0.0, offset)] + anchors + [(span, span + offset)])
         banded_pairs = _dtw_pairs_banded(groups, note_beats, trend, tight)
         b_anchors, b_matched = _anchors_of(
             banded_pairs, groups, note_beats, trend=trend, band=tight

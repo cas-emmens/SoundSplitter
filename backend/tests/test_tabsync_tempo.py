@@ -157,3 +157,27 @@ def test_bend_records_the_sounding_target_pitch():
     assert beats[0].pitches == [62]
     assert beats[0].alts == [64]
     assert beats[1].alts == []
+
+
+def test_estimate_offset_finds_the_count_in_shift():
+    from app.tabsync import NoteGroup, _estimate_offset, parse_beats
+
+    # Distinct climbing beats every half second; the "recording" plays them all 7s late
+    # (count-in), with a few coincidental early matches that must be outvoted.
+    tex = ".\n:4 " + " ".join(f"{fret}.1" for fret in range(1, 13))
+    beats = parse_beats(tex)
+    groups = [NoteGroup(time=b.notated_time + 7.0, pitches=set(b.pitches)) for b in beats]
+    groups += [NoteGroup(time=0.4, pitches={65}), NoteGroup(time=1.1, pitches={68})]
+    groups.sort(key=lambda g: g.time)
+    assert abs(_estimate_offset(groups, beats) - 7.0) < 0.5
+
+
+def test_estimate_offset_zero_when_no_shift_or_no_evidence():
+    from app.tabsync import NoteGroup, _estimate_offset, parse_beats
+
+    tex = ".\n:4 " + " ".join(f"{fret}.1" for fret in range(1, 13))
+    beats = parse_beats(tex)
+    aligned = [NoteGroup(time=b.notated_time, pitches=set(b.pitches)) for b in beats]
+    assert abs(_estimate_offset(aligned, beats)) < 0.5
+    # Fewer than 8 exact matches: not enough evidence, stay on plain identity.
+    assert _estimate_offset(aligned[:3], beats) == 0.0
