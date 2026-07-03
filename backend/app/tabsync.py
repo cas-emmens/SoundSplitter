@@ -656,7 +656,19 @@ def _structure_prior(stem_path: str, alphatexts: list[str]) -> list[tuple[float,
             print(f"[tabsync] re-anchoring head: sliding {plateau} pairs {n_bars} bars earlier")
             kept = ([(n, a - n_bars * bar) for n, a in kept[:plateau]] + kept[plateau:])
             kept = _monotonic(kept)
-    return kept
+    # Where TRUE grid coverage starts (notated): pairs slid before the first measured
+    # boundary are structural estimates, not measurements — the reconciliation must not
+    # let them dictate pacing (a drum-less rubato intro runs at its own tempo).
+    cov_lo = next((n for n, a in kept if a >= audio_bars[0][0] - 0.5), kept[0][0])
+    # Grid steadiness decides how much AUTHORITY the grid gets downstream. A metronomic
+    # groove (IRTM: ±0.2% bar variation) earns grid-first pacing — its self-similar bars
+    # defeat pitch anchors. A humanly varying band (Stairway: 19% — fills, tempo ramp)
+    # does not: its bar map carries confident-looking wrong-repetition assignments (the
+    # outro ran ahead on ear-verified material), so there the grid stays a structure
+    # hint for the DTW band and pitch anchors keep the warp.
+    durs = sorted(p for _, p in grid.periods)
+    steady = bool(durs) and (durs[int(0.9 * len(durs))] - durs[int(0.1 * len(durs))]) / durs[len(durs) // 2] < 0.05
+    return kept, cov_lo, steady
 
 
 def _first_onset(stem_path: str) -> float | None:
@@ -713,7 +725,7 @@ def _calibrate_prior(prior, anchors, head_onset: float | None = None):
     return shifted
 
 
-def _with_prior_fallback(anchors, prior):
+def _with_prior_fallback(anchors, prior, cov_lo: float = 0.0, steady: bool = True):
     """Reconcile a part's pitch anchors with the (phase-calibrated) drum-grid prior.
 
     A song's parts share one measure grid, so they share one offset curve (Cas's
@@ -724,8 +736,16 @@ def _with_prior_fallback(anchors, prior):
     wrong-repetition locks — a repeating lick matches its neighbour bar perfectly, so
     the wrong cluster is dense and internally consistent (IRTM's lead ran one measure
     ahead through the very stretches Cas named). They are dropped, and grid pairs fill
-    the holes so pacing follows the measured bars instead of gliding between distant
-    or anticipated anchors.
+    the holes so pacing follows the measured bars.
+
+    The grid must not assert itself where it measured nothing (Cas, round 4):
+    - Before ``cov_lo`` the prior pairs are slid structural estimates at grid tempo,
+      but a drum-less intro runs at its own tempo (IRTM's rubato intro put the cursor
+      1.5 bars ahead by bar 9). Only the head pin (first pair ≈ the instrument's
+      entry) survives; the intro is paced by the part's own anchors.
+    - Beyond the part's last own anchor, gradually drifting map pairs are assignment
+      noise, not structure (Stairway's outro ran ahead) — fillers there survive only
+      from a real structure JUMP (>1.5 bars step) onward, e.g. IRTM's outro inserts.
     """
     import statistics
 
@@ -733,20 +753,35 @@ def _with_prior_fallback(anchors, prior):
         return list(prior or [])
     if not prior:
         return list(anchors)
+    if not steady:
+        # Unsteady grid: no pacing authority — pitch anchors keep the warp untouched
+        # (the ear-verified Stairway behavior across every region).
+        return list(anchors)
     bar = statistics.median(b[1] - a[1] for a, b in zip(prior, prior[1:])) or 2.0
     trend = _pin_identity(list(prior))
-    lo, hi = prior[0][0], prior[-1][0]
+    hi = prior[-1][0]
     kept = [
         (n, a) for n, a in anchors
-        # Only gate INSIDE grid coverage: outside it the trend is a blind slope-1
-        # extrapolation, no basis for dropping real anchors (12-String-1 lost its
-        # first anchor to it).
-        if not (lo <= n <= hi) or abs(a - _warp(n, trend)) <= 0.5 * bar
+        # Only gate inside TRUE grid coverage: outside it the trend is a blind
+        # slope-1 extrapolation, no basis for dropping real anchors.
+        if not (cov_lo <= n <= hi) or abs(a - _warp(n, trend)) <= 0.5 * bar
     ]
-    filler = [
-        p for p in prior
-        if not any(abs(n - p[0]) <= 1.0 * bar for n, _ in kept)
-    ]
+    last_own = kept[-1][0] if kept else -1e9
+    filler: list[tuple[float, float]] = []
+    tail_jumped = False
+    for k, p in enumerate(prior):
+        if any(abs(n - p[0]) <= 1.0 * bar for n, _ in kept):
+            continue
+        if p[0] < cov_lo:
+            if k == 0:  # the head pin: the tab's first bar at the instrument's entry
+                filler.append(p)
+            continue
+        if p[0] > last_own:
+            if k and abs((p[1] - p[0]) - (prior[k - 1][1] - prior[k - 1][0])) > 1.5 * bar:
+                tail_jumped = True
+            if not tail_jumped:
+                continue
+        filler.append(p)
     return _monotonic(sorted(kept + filler))
 
 
@@ -1187,7 +1222,7 @@ def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
 def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[dict]:
     """Align all parts on a stem, assigning each its own pan side competitively (see
     :func:`_assign_sides`). Returns one timing dict per part (same order), tagged with ``side``."""
-    prior = _structure_prior(stem_path, alphatexts)
+    prior, cov_lo, steady = _structure_prior(stem_path, alphatexts) or (None, 0.0, False)
     variants = []
     counts: list[tuple[int, int]] = []
     for tex in alphatexts:
@@ -1216,7 +1251,7 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
     # Grid phase calibration from the densest part's anchors (see _calibrate_prior) —
     # one shared correction, so every part reconciles against the same calibrated grid.
     best = max((c for _, c, _ in picked if c), key=lambda c: len(c["anchors"]), default=None)
-    if prior and best:
+    if prior and best and steady:
         prior = _calibrate_prior(prior, best["anchors"], head_onset=_first_onset(stem_path))
 
     out: list[dict] = []
@@ -1224,7 +1259,7 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
         if chosen is None:
             out.append({"version": 1, "anchors": [], "bar_times": [], "missing": [], "side": side})
             continue
-        anchors = _with_prior_fallback(chosen["anchors"], prior)
+        anchors = _with_prior_fallback(chosen["anchors"], prior, cov_lo, steady)
         focus_beats = parse_beats(tex)
         bar_start: dict[int, float] = {}
         for b in focus_beats:
@@ -1260,7 +1295,7 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
         return {"version": 1, "anchors": [], "bar_times": [], "missing": []}
     beat_pitches = [b.pitches for b in note_beats]
 
-    prior = _structure_prior(stem_path, [focus_alphatex])
+    prior, cov_lo, steady = _structure_prior(stem_path, [focus_alphatex]) or (None, 0.0, False)
     mono = _align_variant(stem_path, None, beat_pitches, note_beats, prior)
     left = _align_variant(stem_path, "left", beat_pitches, note_beats, prior)
     right = _align_variant(stem_path, "right", beat_pitches, note_beats, prior)
@@ -1271,9 +1306,9 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
     if chosen is None:
         return {"version": 1, "anchors": [], "bar_times": [], "missing": []}
 
-    if prior:
+    if prior and steady:
         prior = _calibrate_prior(prior, chosen["anchors"], head_onset=_first_onset(stem_path))
-    anchors = _with_prior_fallback(chosen["anchors"], prior)
+    anchors = _with_prior_fallback(chosen["anchors"], prior, cov_lo, steady)
     focus_beats = parse_beats(focus_alphatex)
     bar_start: dict[int, float] = {}
     for b in focus_beats:
