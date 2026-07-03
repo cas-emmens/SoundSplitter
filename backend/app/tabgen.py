@@ -90,7 +90,7 @@ def sync_timing(tab_id: int) -> None:
         stem = db.get_stem(tab["stem_id"])
         if not stem:
             return
-        from .tabsync import compute_timings_competitive
+        from .tabsync import apply_manual, compute_timings_competitive
 
         with _stem_lock(tab["stem_id"]):
             siblings = [
@@ -102,6 +102,11 @@ def sync_timing(tab_id: int) -> None:
                 return
             timings = compute_timings_competitive(stem["path"], [t["alphatex"] for t in siblings])
             for t, timing in zip(siblings, timings):
+                # Hand-placed anchors from the timing editor are ear-grade truth:
+                # they survive every re-sync and beat nearby engine anchors.
+                old = json.loads(t["timing"]) if t.get("timing") else {}
+                if old.get("manual"):
+                    timing = apply_manual(timing, old["manual"], t["alphatex"])
                 db.set_tab_timing(t["id"], json.dumps(timing))
     except Exception:  # noqa: BLE001
         traceback.print_exc()

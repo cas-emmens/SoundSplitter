@@ -290,6 +290,47 @@ def sync_tab(tab_id: int) -> dict:
     return {"ok": True}
 
 
+@app.patch("/api/tabs/{tab_id}/timing")
+def update_tab_timing(tab_id: int, payload: dict) -> dict:
+    """Save hand-edited anchors from the timing editor.
+
+    ``manual`` holds the user's own (notated, audio) anchor pairs — they are folded into
+    the engine anchors (winning over any engine anchor within ±0.6s notated), the bar
+    warp is rebuilt around them, and sync_timing re-applies them after every re-sync.
+    An empty ``manual`` list clears all hand edits and restores the engine timing on
+    the next re-sync.
+    """
+    import json
+
+    from .tabsync import apply_manual, bar_times_from, notated_bar_starts
+
+    tab = db.get_tab(tab_id)
+    if tab is None:
+        raise HTTPException(404, "tab not found")
+    if not tab.get("alphatex"):
+        raise HTTPException(400, "tab has no transcription yet")
+    manual = payload.get("manual")
+    if not isinstance(manual, list) or not all(
+        isinstance(p, (list, tuple)) and len(p) == 2 for p in manual
+    ):
+        raise HTTPException(400, "manual must be a list of [notated, audio] pairs")
+
+    timing = json.loads(tab["timing"]) if tab.get("timing") else {"version": 1, "anchors": [], "missing": []}
+    # Rebuild from the engine's anchors (those NOT previously injected by hand) so
+    # repeated edits don't accumulate stale manual positions.
+    engine = [p for p in (timing.get("anchors") or [])
+              if [round(float(p[0]), 4), round(float(p[1]), 4)] not in (timing.get("manual") or [])]
+    timing["anchors"] = engine
+    timing["manual"] = []
+    if manual:
+        timing = apply_manual(timing, manual, tab["alphatex"])
+    else:
+        timing["bar_times"] = bar_times_from(tab["alphatex"], engine)
+        timing["notated_bars"] = notated_bar_starts(tab["alphatex"])
+    db.set_tab_timing(tab_id, json.dumps(timing))
+    return _tab_dict(db.get_tab(tab_id))
+
+
 @app.delete("/api/tabs/{tab_id}")
 def delete_tab(tab_id: int) -> dict:
     db.delete_tab(tab_id)

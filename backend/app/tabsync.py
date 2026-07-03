@@ -1261,24 +1261,58 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
             continue
         anchors = _with_prior_fallback(chosen["anchors"], prior, cov_lo, steady)
         focus_beats = parse_beats(tex)
-        bar_start: dict[int, float] = {}
-        for b in focus_beats:
-            bar_start.setdefault(b.bar, b.notated_time)
-        n_bars = (max(bar_start) + 1) if bar_start else 0
-        # Bars outside the anchored region continue at slope 1 (see _pin_identity): a flat
-        # clamp gave every closing bar the last anchor's time (count-in read a 0s beat there).
-        trend = _pin_identity(anchors) if anchors else []
-        bar_times = [round(_warp(bar_start.get(i, 0.0), trend), 4) for i in range(n_bars)]
         missing_groups = [g for ai, g in enumerate(chosen["groups"]) if ai not in chosen["matched"]]
         res = AlignResult([], [], anchors, missing_groups)
         out.append({
             "version": 1,
             "anchors": [[round(n, 4), round(a, 4)] for n, a in anchors],
-            "bar_times": bar_times,
+            "bar_times": bar_times_from(tex, anchors),
+            "notated_bars": notated_bar_starts(tex),
             "missing": _candidate_missing(focus_beats, res),
             "side": side,
         })
     return out
+
+
+def notated_bar_starts(alphatex: str) -> list[float]:
+    """Notated start time (seconds at tab tempo) of every bar — the tab-side ruler the
+    timing editor uses to map anchors/clicks onto score positions."""
+    bar_start: dict[int, float] = {}
+    for b in parse_beats(alphatex):
+        bar_start.setdefault(b.bar, b.notated_time)
+    n_bars = (max(bar_start) + 1) if bar_start else 0
+    return [round(bar_start.get(i, 0.0), 4) for i in range(n_bars)]
+
+
+def bar_times_from(alphatex: str, anchors) -> list[float]:
+    """Warped audio time of every bar start, from an anchor list (notated, audio).
+
+    Bars outside the anchored region continue at slope 1 (see _pin_identity): a flat
+    clamp gave every closing bar the last anchor's time (count-in read a 0s beat there).
+    """
+    trend = _pin_identity([tuple(a) for a in anchors]) if anchors else []
+    return [round(_warp(n, trend), 4) for n in notated_bar_starts(alphatex)]
+
+
+def apply_manual(timing: dict, manual, alphatex: str) -> dict:
+    """Fold the user's hand-placed anchors into an (engine-computed) timing dict.
+
+    Manual anchors are ear-grade truth from the timing editor: they beat any engine
+    anchor within ±0.6s notated, survive re-syncs (sync_timing re-applies them), and
+    the bar warp is rebuilt around them.
+    """
+    manual = sorted((float(n), float(a)) for n, a in manual)
+    if not manual:
+        return timing
+    engine = [tuple(p) for p in (timing.get("anchors") or [])]
+    kept = [p for p in engine if all(abs(p[0] - n) > 0.6 for n, _ in manual)]
+    anchors = _monotonic(sorted(kept + manual))
+    timing = dict(timing)
+    timing["anchors"] = [[round(n, 4), round(a, 4)] for n, a in anchors]
+    timing["manual"] = [[round(n, 4), round(a, 4)] for n, a in manual]
+    timing["bar_times"] = bar_times_from(alphatex, anchors)
+    timing.setdefault("notated_bars", notated_bar_starts(alphatex))
+    return timing
 
 
 def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
@@ -1310,19 +1344,13 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
         prior = _calibrate_prior(prior, chosen["anchors"], head_onset=_first_onset(stem_path))
     anchors = _with_prior_fallback(chosen["anchors"], prior, cov_lo, steady)
     focus_beats = parse_beats(focus_alphatex)
-    bar_start: dict[int, float] = {}
-    for b in focus_beats:
-        bar_start.setdefault(b.bar, b.notated_time)
-    n_bars = (max(bar_start) + 1) if bar_start else 0
-    trend = _pin_identity(anchors) if anchors else []
-    bar_times = [round(_warp(bar_start.get(i, 0.0), trend), 4) for i in range(n_bars)]
-
     missing_groups = [g for ai, g in enumerate(chosen["groups"]) if ai not in chosen["matched"]]
     res = AlignResult([], [], anchors, missing_groups)
     return {
         "version": 1,
         "anchors": [[round(n, 4), round(a, 4)] for n, a in anchors],
-        "bar_times": bar_times,
+        "bar_times": bar_times_from(focus_alphatex, anchors),
+        "notated_bars": notated_bar_starts(focus_alphatex),
         "missing": _candidate_missing(focus_beats, res),
     }
 

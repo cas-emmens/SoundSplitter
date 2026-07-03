@@ -6,6 +6,7 @@ export const routes: Routes = [
   { path: 'library', loadComponent: () => import('./pages/library/library').then(m => m.LibraryPage) },
   { path: 'player/:id', loadComponent: () => import('./pages/player/player').then(m => m.PlayerPage) },
   { path: 'tabs/:id', loadComponent: () => import('./pages/tabs/tabs').then(m => m.TabsPage) },
+  { path: 'timing/:tabId', loadComponent: () => import('./pages/timing/timing-editor').then(m => m.TimingEditorPage) },
   { path: 'theory', loadComponent: () => import('./pages/theory/theory').then(m => m.TheoryPage) },
   { path: 'practice', loadComponent: () => import('./pages/practice/practice').then(m => m.PracticePage) },
   { path: '**', redirectTo: 'library' }

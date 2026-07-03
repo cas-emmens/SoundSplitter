@@ -42,6 +42,10 @@
         }
         <span class="sep"></span>
         <button (click)="startEdit()" [disabled]="selectedId() == null" title="Edit this tab's notes">✎ Edit</button>
+        @if (selectedId() != null) {
+          <a class="timing-link" [routerLink]="['/timing', selectedId()]"
+             title="Manually align anchors to the recording">⏱ Timing</a>
+        }
       } @else {
         <button class="primary" (click)="saveEdit()" [disabled]="saving()">{{ saving() ? 'Saving…' : '💾 Save' }}</button>
         <button (click)="cancelEdit()" [disabled]="saving()">Cancel</button>

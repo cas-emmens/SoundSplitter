@@ -73,6 +73,8 @@ export interface TabTiming {
   version: number;
   anchors: [number, number][];   // [notated_s, audio_s] confident matches
   bar_times: number[];           // audio start time (s) per bar, in render order
+  notated_bars?: number[];       // notated start time (s) per bar (tab-tempo ruler)
+  manual?: [number, number][];   // hand-placed anchors (timing editor); survive re-syncs
   missing: { bar: number; midi: number[]; t: number; amp: number }[];  // audio cross-check hints
 }
 export interface Tab {
@@ -177,6 +179,9 @@ export class Api {
   }
   updateTab(tabId: number, alphatex: string) {
     return this.http.patch<Tab>(`${this.base}/tabs/${tabId}`, { alphatex });
+  }
+  updateTabTiming(tabId: number, manual: [number, number][]) {
+    return this.http.patch<Tab>(`${this.base}/tabs/${tabId}/timing`, { manual });
   }
   deleteTab(tabId: number) {
     return this.http.delete<{ ok: boolean }>(`${this.base}/tabs/${tabId}`);
