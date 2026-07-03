@@ -571,7 +571,7 @@ def _structure_prior(stem_path: str, alphatexts: list[str]) -> list[tuple[float,
     events = extract_note_events(stem_path)
     audio_bars: list[tuple[float, set[int]]] = []
     for b0, b1 in zip(grid.boundaries, grid.boundaries[1:]):
-        if b1 - b0 > 8:  # gap between drum sections
+        if b1 - b0 > 8 or b1 - b0 < 0.3:  # section gap / overlapping extended sections
             continue
         audio_bars.append((b0, {int(p) for (s, e, p, a) in events if b0 <= s < b1 and a >= 0.4}))
 
@@ -625,7 +625,55 @@ def _structure_prior(stem_path: str, alphatexts: list[str]) -> list[tuple[float,
     kept = trim(kept[::-1])[::-1]
     if len(kept) < 8:
         return None
-    return _monotonic(kept)
+    kept = _monotonic(kept)
+
+    # Sanity checks (Cas's): tempo x measures gives a rough duration budget, and a tab
+    # starts where its instrument starts — the mapped tab start must not leave bars of
+    # guitar audio unexplained. A self-similar intro (repeated groove passes) gives the
+    # bar DTW several equally-cheap placements one section-pass apart, and when drum
+    # coverage starts late (IRTM: kit enters after 10 guitar bars) it latches onto a
+    # later pass. The misplacement is then a whole-bar multiple: slide the head plateau
+    # (up to the first structure jump) back onto the first onset.
+    onsets = [g for g in group_onsets(events) if g.pitches]
+    if onsets:
+        bar = statistics.median(b1 - b0 for (b0, _), (b1, _)
+                                in zip(audio_bars, audio_bars[1:]) if 0 < b1 - b0 < 8)
+        # First sustained onset (another follows within 2s), not a stray artifact.
+        start = next((g.time for g, nxt in zip(onsets, onsets[1:]) if nxt.time - g.time < 2.0),
+                     onsets[0].time)
+        slack = (onsets[-1].time - onsets[0].time) - tab_bars[-1][0]
+        head_gap = _warp(tab_bars[0][0], _pin_identity(kept)) - start
+        n_bars = round(head_gap / bar)
+        print(f"[tabsync] structure prior: {len(kept)} pairs, duration slack {slack:+.1f}s,"
+              f" head gap {head_gap:+.1f}s (~{head_gap / bar:+.1f} bars)")
+        if head_gap > 1.5 * bar and abs(head_gap - n_bars * bar) <= 0.35 * bar:
+            plateau = len(kept)
+            for k in range(1, len(kept)):
+                jump = (kept[k][1] - kept[k][0]) - (kept[k - 1][1] - kept[k - 1][0])
+                if abs(jump) > 2.5:
+                    plateau = k
+                    break
+            print(f"[tabsync] re-anchoring head: sliding {plateau} pairs {n_bars} bars earlier")
+            kept = ([(n, a - n_bars * bar) for n, a in kept[:plateau]] + kept[plateau:])
+            kept = _monotonic(kept)
+    return kept
+
+
+def _with_prior_fallback(anchors, prior, margin: float = 5.0):
+    """Outside a part's own anchor coverage the warp follows the shared structure prior.
+
+    A song's parts share one measure grid, so they share one offset curve (Cas's
+    consistency check). A sparse part — the lead whose first anchor sits mid-song —
+    otherwise slope-1 extrapolates its head from whatever plateau its first anchor is
+    on: IRTM's lead cursor started ~9 bars late while the rhythm started ~4 late.
+    """
+    if not anchors:
+        return list(prior or [])
+    if not prior:
+        return list(anchors)
+    lo, hi = anchors[0][0] - margin, anchors[-1][0] + margin
+    merged = [p for p in prior if p[0] < lo or p[0] > hi] + list(anchors)
+    return _monotonic(sorted(merged))
 
 
 _GAP_AUDIO = 0.55   # bar-DTW: skip an audio bar (un-notated vamp / extra pass)
@@ -1096,7 +1144,7 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
         if chosen is None:
             out.append({"version": 1, "anchors": [], "bar_times": [], "missing": [], "side": side})
             continue
-        anchors = chosen["anchors"]
+        anchors = _with_prior_fallback(chosen["anchors"], prior)
         focus_beats = parse_beats(tex)
         bar_start: dict[int, float] = {}
         for b in focus_beats:
@@ -1143,7 +1191,7 @@ def compute_timing(stem_path: str, focus_alphatex: str, *_compat) -> dict:
     if chosen is None:
         return {"version": 1, "anchors": [], "bar_times": [], "missing": []}
 
-    anchors = chosen["anchors"]
+    anchors = _with_prior_fallback(chosen["anchors"], prior)
     focus_beats = parse_beats(focus_alphatex)
     bar_start: dict[int, float] = {}
     for b in focus_beats:
