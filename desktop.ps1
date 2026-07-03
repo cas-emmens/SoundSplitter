@@ -47,6 +47,10 @@ if ($LASTEXITCODE -ne 0) {
 # A fast check; if anything is missing we run the full setup.ps1 (which is itself idempotent),
 # so `.\desktop.ps1` is a single "install if needed, then run" command.
 function Test-Provisioned {
+    # Native stderr must not throw under the script's ErrorActionPreference=Stop:
+    # basic-pitch (and TensorFlow) print import-time WARNINGs to stderr, and PS 5.1
+    # turns redirected native stderr into error records - the check itself would die.
+    $ErrorActionPreference = "Continue"
     $venvPy = Join-Path $root "backend\.venv\Scripts\python.exe"
     if (-not (Test-Path $venvPy)) { return $false }
     # backend python deps, including the image-tabs tab-generation stack
