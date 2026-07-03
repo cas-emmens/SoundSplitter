@@ -90,8 +90,28 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
       const done = r.tabs.filter((t) => t.status === 'done' && t.alphatex);
       this.tabs.set(done);
       if (done.length) this.selectTab(done[0].id);
+      this.pollTimingUntilSynced();
     });
   }
+
+  /** Timing sync finishes minutes after a tab turns 'done' (basic-pitch on three pan
+   *  variants). Without refetching, a freshly generated tab keeps its null timing and the
+   *  cursor silently rides the raw tab timeline until a manual reload. */
+  private pollTimingUntilSynced() {
+    clearTimeout(this.timingTimer);
+    if (!this.tabs().some((t) => !t.timing)) { this.status.set(''); return; }
+    this.status.set('Syncing to the recording…');
+    this.timingTimer = window.setTimeout(() => {
+      this.api.listTabs(this.trackId).subscribe((r) => {
+        this.tabs.update((ts) => ts.map((t) => {
+          const fresh = r.tabs.find((x) => x.id === t.id);
+          return fresh?.timing ? { ...t, timing: fresh.timing } : t;
+        }));
+        this.pollTimingUntilSynced();
+      });
+    }, 5000);
+  }
+  private timingTimer = 0;
 
   ngAfterViewInit() {
     // alphaTab creation/render is handled by the constructor effect (the host is behind an @if
@@ -102,6 +122,7 @@ export class TabsPage implements OnInit, AfterViewInit, OnDestroy {
   ngOnDestroy() {
     cancelAnimationFrame(this.raf);
     clearTimeout(this.resizeTimer);
+    clearTimeout(this.timingTimer);
     window.removeEventListener('resize', this.onResize);
     this.mix.stop();
     this.at?.destroy();
