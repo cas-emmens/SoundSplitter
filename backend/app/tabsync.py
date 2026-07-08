@@ -725,6 +725,57 @@ def _calibrate_prior(prior, anchors, head_onset: float | None = None):
     return shifted
 
 
+def _fits_between(pair, truth) -> bool:
+    """True when inserting ``pair`` among the sorted ``truth`` anchors keeps both axes
+    strictly increasing — i.e. the pair doesn't cross any hand-placed truth."""
+    n, a = pair
+    lo = hi = None
+    for t in truth:
+        if t[0] < n:
+            lo = t
+        elif t[0] > n:
+            hi = t
+            break
+        else:
+            return False
+    if lo is not None and a <= lo[1]:
+        return False
+    if hi is not None and a >= hi[1]:
+        return False
+    return True
+
+
+def _merge_guides(prior, guides):
+    """Fold hand-placed timing-editor anchors into an alignment prior as ear-grade truth.
+
+    Guide pairs join the trend outright. Prior pairs are dropped when they sit within
+    half a bar (notated) of a guide, when they disagree with the guide trend by more
+    than a bar inside (or within two bars of) guide coverage — the user placed anchors
+    there precisely because the engine's map was wrong — or when keeping them would
+    cross a guide. With no grid prior at all the guides alone become the prior: pass
+    one then bands around hand-placed truth instead of a (mis-)estimated global
+    offset, which is the rescue path for songs the automatic sync gets far wrong.
+    """
+    import statistics
+
+    guides = _monotonic([(float(n), float(a)) for n, a in (guides or [])])
+    if not guides:
+        return prior
+    if not prior:
+        return guides
+    bar = (statistics.median(b[1] - a[1] for a, b in zip(prior, prior[1:]))
+           if len(prior) > 1 else 2.0) or 2.0
+    gtrend = _pin_identity(guides)
+    lo, hi = guides[0][0] - 2 * bar, guides[-1][0] + 2 * bar
+    kept = [
+        p for p in prior
+        if all(abs(p[0] - n) > 0.5 * bar for n, _ in guides)
+        and not (lo <= p[0] <= hi and abs(p[1] - _warp(p[0], gtrend)) > 1.0 * bar)
+        and _fits_between(p, guides)
+    ]
+    return _monotonic(sorted(kept + guides))
+
+
 def _with_prior_fallback(anchors, prior, cov_lo: float = 0.0, steady: bool = True):
     """Reconcile a part's pitch anchors with the (phase-calibrated) drum-grid prior.
 
@@ -1219,18 +1270,30 @@ def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
         )
 
 
-def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[dict]:
+def compute_timings_competitive(stem_path: str, alphatexts: list[str],
+                                manual_lists: list[list] | None = None) -> list[dict]:
     """Align all parts on a stem, assigning each its own pan side competitively (see
-    :func:`_assign_sides`). Returns one timing dict per part (same order), tagged with ``side``."""
+    :func:`_assign_sides`). Returns one timing dict per part (same order), tagged with ``side``.
+
+    ``manual_lists`` (same order as ``alphatexts``) carries each part's hand-placed
+    timing-editor anchors. All parts of a song share one measure grid, so their UNION
+    guides every part's alignment (see :func:`_merge_guides`): pass one bands around
+    the hand-fixed trend instead of a mis-estimated offset/grid, and the guided prior
+    also backs the fallback reconciliation. This is the timing editor's "re-run the
+    automatic sync using my anchors" path.
+    """
+    guides = _monotonic(sorted({(float(n), float(a))
+                                for ml in (manual_lists or []) for n, a in ml}))
     prior, cov_lo, steady = _structure_prior(stem_path, alphatexts) or (None, 0.0, False)
+    align_prior = _merge_guides(prior, guides)
     variants = []
     counts: list[tuple[int, int]] = []
     for tex in alphatexts:
         nb = matchable_beats(parse_beats(tex))
         bp = [b.pitches for b in nb]
-        vl = _align_variant(stem_path, "left", bp, nb, prior)
-        vr = _align_variant(stem_path, "right", bp, nb, prior)
-        vm = _align_variant(stem_path, None, bp, nb, prior)
+        vl = _align_variant(stem_path, "left", bp, nb, align_prior)
+        vr = _align_variant(stem_path, "right", bp, nb, align_prior)
+        vm = _align_variant(stem_path, None, bp, nb, align_prior)
         variants.append((tex, {"left": vl, "right": vr, "mono": vm}))
         counts.append(((vl or {"n": 0})["n"], (vr or {"n": 0})["n"]))
 
@@ -1253,13 +1316,16 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str]) -> list[d
     best = max((c for _, c, _ in picked if c), key=lambda c: len(c["anchors"]), default=None)
     if prior and best and steady:
         prior = _calibrate_prior(prior, best["anchors"], head_onset=_first_onset(stem_path))
+    # Re-impose the hand-placed pairs post-calibration: the phase shift is a grid
+    # correction and must not move ear-grade truth.
+    fallback_prior = _merge_guides(prior, guides)
 
     out: list[dict] = []
     for tex, chosen, side in picked:
         if chosen is None:
             out.append({"version": 1, "anchors": [], "bar_times": [], "missing": [], "side": side})
             continue
-        anchors = _with_prior_fallback(chosen["anchors"], prior, cov_lo, steady)
+        anchors = _with_prior_fallback(chosen["anchors"], fallback_prior, cov_lo, steady)
         focus_beats = parse_beats(tex)
         missing_groups = [g for ai, g in enumerate(chosen["groups"]) if ai not in chosen["matched"]]
         res = AlignResult([], [], anchors, missing_groups)
@@ -1298,14 +1364,17 @@ def apply_manual(timing: dict, manual, alphatex: str) -> dict:
     """Fold the user's hand-placed anchors into an (engine-computed) timing dict.
 
     Manual anchors are ear-grade truth from the timing editor: they beat any engine
-    anchor within ±0.6s notated, survive re-syncs (sync_timing re-applies them), and
-    the bar warp is rebuilt around them.
+    anchor within ±0.6s notated, evict engine anchors they would otherwise cross (on
+    a far-off song the hand fix IS a crossing — a plain sorted monotonic merge kept
+    the wrong engine anchor and silently dropped the manual pair), survive re-syncs
+    (sync_timing re-applies them), and the bar warp is rebuilt around them.
     """
-    manual = sorted((float(n), float(a)) for n, a in manual)
+    manual = _monotonic([(float(n), float(a)) for n, a in manual])
     if not manual:
         return timing
     engine = [tuple(p) for p in (timing.get("anchors") or [])]
-    kept = [p for p in engine if all(abs(p[0] - n) > 0.6 for n, _ in manual)]
+    kept = [p for p in engine
+            if all(abs(p[0] - n) > 0.6 for n, _ in manual) and _fits_between(p, manual)]
     anchors = _monotonic(sorted(kept + manual))
     timing = dict(timing)
     timing["anchors"] = [[round(n, 4), round(a, 4)] for n, a in anchors]

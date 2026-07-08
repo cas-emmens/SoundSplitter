@@ -35,8 +35,13 @@ interface BeatSpot {
         </label>
         <label class="dim"><input type="checkbox" [(ngModel)]="follow"> follow</label>
         <button (click)="undo()" [disabled]="!undoCount()" title="Undo last anchor edit (Ctrl+Z)">↩ Undo</button>
+        <button (click)="resync()" [disabled]="syncing()"
+                title="Re-run the automatic sync — your manual anchors guide the whole alignment">
+          {{ syncing() ? '⟳ Syncing…' : '⟳ Guided re-sync' }}
+        </button>
+        <span class="dim counts">{{ anchors().length }} anchors · {{ manualCount() }} manual</span>
         <span class="status">{{ status() }}</span>
-        <span class="hint dim">click note ↔ anchor · drag or ←/→ to nudge (shift = coarse) · Del removes a manual anchor</span>
+        <span class="hint dim">click note ↔ anchor · drag or ←/→ nudges (shift = coarse) · A = anchor to playhead · [ ] = prev/next · Del removes a manual anchor</span>
       </div>
 
       <div class="tabstrip" #tabScroll>
@@ -118,6 +123,8 @@ export class TimingEditorPage implements OnInit, OnDestroy {
 
   totalPx = computed(() => Math.ceil(this.duration * this.pps()));
   timeLabel = signal('0:00.0');
+  syncing = signal(false);
+  manualCount = computed(() => this.anchors().filter((a) => this.manualKeys().has(a[0].toFixed(4))).length);
 
   private atHost = viewChild.required<ElementRef<HTMLDivElement>>('atHost');
   private atWrap = viewChild.required<ElementRef<HTMLDivElement>>('atWrap');
@@ -139,6 +146,7 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   private pausedPos = 0;
   private raf = 0;
   private saveTimer = 0;
+  private syncPollTimer = 0;
   private drag: { idx: number; moved: boolean } | null = null;
   undoCount = signal(0);
   private undoStack: { anchors: [number, number][]; manual: string[] }[] = [];
@@ -169,6 +177,7 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   ngOnDestroy() {
     cancelAnimationFrame(this.raf);
     clearTimeout(this.saveTimer);
+    clearTimeout(this.syncPollTimer);
     window.removeEventListener('keydown', this.onKey);
     this.stopSource();
     this.ctx?.close();
@@ -245,6 +254,7 @@ export class TimingEditorPage implements OnInit, OnDestroy {
     if (idx != null) {
       this.select(idx);
     } else {
+      if (this.locked()) return;
       this.pushUndo();
       const audio = this.notatedToAudio(best.notated);
       const list = [...this.anchors(), [best.notated, audio] as [number, number]]
@@ -262,6 +272,60 @@ export class TimingEditorPage implements OnInit, OnDestroy {
     this.highlight.set({ x: s.x - 4, y: s.y - 6, w: s.w + 8, h: s.h + 12 });
   }
 
+  // ---------------------------------------------------------------- guided re-sync
+  /** Re-run the automatic sync: the engine re-aligns the whole stem (all sibling
+   *  parts) with the saved manual anchors as its prior, then the fresh warp is
+   *  loaded back in. Editing is locked while it runs — a save mid-sync would race
+   *  the engine's write. */
+  resync() {
+    const tab = this.tab();
+    if (!tab || this.syncing()) return;
+    clearTimeout(this.saveTimer);       // any pending edit is already in `manual`; flush would race
+    const before = tab.timing?.synced_at ?? null;
+    this.syncing.set(true);
+    this.status.set('Re-syncing…');
+    const manual = this.anchors().filter((a) => this.isManual(a));
+    // Persist the current hand edits first so the engine sees them as guides.
+    this.api.updateTabTiming(tab.id, manual).subscribe({
+      next: () => this.api.syncTab(tab.id).subscribe({
+        next: () => this.pollSync(before, performance.now()),
+        error: () => { this.syncing.set(false); this.status.set('Sync failed'); },
+      }),
+      error: () => { this.syncing.set(false); this.status.set('Save failed'); },
+    });
+  }
+
+  private pollSync(before: number | null, started: number) {
+    this.syncPollTimer = window.setTimeout(() => {
+      this.api.getTab(this.tab()!.id).subscribe((tab) => {
+        const stamp = tab.timing?.synced_at ?? null;
+        if (stamp != null && stamp !== before) {
+          this.tab.set(tab);
+          this.anchors.set((tab.timing?.anchors ?? []).map(([n, a]) => [n, a] as [number, number]));
+          this.manualKeys.set(new Set((tab.timing?.manual ?? []).map(([n]) => n.toFixed(4))));
+          this.undoStack = [];          // old snapshots refer to the replaced engine anchors
+          this.undoCount.set(0);
+          this.select(null);
+          this.syncing.set(false);
+          this.status.set('Re-synced ✓');
+          this.drawWave();
+        } else if (performance.now() - started > 8 * 60_000) {
+          this.syncing.set(false);
+          this.status.set('Sync timed out — check the server log');
+        } else {
+          this.status.set(`Re-syncing… ${Math.round((performance.now() - started) / 1000)}s`);
+          this.pollSync(before, started);
+        }
+      });
+    }, 2500);
+  }
+
+  /** True (with a status nudge) while a re-sync locks out anchor edits. */
+  private locked(): boolean {
+    if (this.syncing()) this.status.set('re-sync running…');
+    return this.syncing();
+  }
+
   // ---------------------------------------------------------------- anchors
   /** Snapshot the anchor state before a mutation, for Ctrl+Z / the Undo button. */
   private pushUndo() {
@@ -274,6 +338,7 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   }
 
   undo() {
+    if (this.locked()) return;
     const s = this.undoStack.pop();
     if (!s) return;
     this.undoCount.set(this.undoStack.length);
@@ -326,6 +391,7 @@ export class TimingEditorPage implements OnInit, OnDestroy {
     ev.preventDefault();
     ev.stopPropagation();
     this.select(idx);
+    if (this.locked()) return;
     this.drag = { idx, moved: false };
     const move = (e: PointerEvent) => {
       if (!this.drag) return;
@@ -334,7 +400,9 @@ export class TimingEditorPage implements OnInit, OnDestroy {
       const spacer = this.waveScroll().nativeElement;
       const rect = spacer.getBoundingClientRect();
       const t = (e.clientX - rect.left + spacer.scrollLeft) / this.pps();
-      this.moveAnchor(this.drag.idx, t);
+      // moving past engine anchors evicts them, shifting the index
+      this.drag.idx = this.moveAnchor(this.drag.idx, t);
+      this.selected.set(this.drag.idx);
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
@@ -346,17 +414,27 @@ export class TimingEditorPage implements OnInit, OnDestroy {
     window.addEventListener('pointerup', up);
   }
 
-  private moveAnchor(idx: number, audio: number) {
-    const list = this.anchors().map((p, i) => {
-      if (i !== idx) return p;
-      // stay monotonic between neighbours
-      const lo = i > 0 ? this.anchors()[i - 1][1] + 0.05 : 0;
-      const hi = i + 1 < this.anchors().length ? this.anchors()[i + 1][1] - 0.05 : this.duration;
-      const clamped = Math.min(Math.max(audio, lo), Math.max(lo, hi));
-      this.markManual(p[0]);
-      return [p[0], Math.round(clamped * 1000) / 1000] as [number, number];
-    });
+  /** Move an anchor to `audio` seconds and return its index in the updated list.
+   *
+   * Only MANUAL anchors are hard walls: on a far-off song the engine anchors in the
+   * way are exactly what the user is overriding, so clamping against them made long
+   * corrections impossible. Engine anchors the move crosses are evicted instead —
+   * the server applies the same rule on save (apply_manual), so the eviction shows
+   * the warp the save will produce. */
+  private moveAnchor(idx: number, audio: number): number {
+    const cur = this.anchors();
+    const nt = cur[idx][0];
+    let lo = 0;
+    let hi = this.duration;
+    for (let i = idx - 1; i >= 0; i--) if (this.isManual(cur[i])) { lo = cur[i][1] + 0.05; break; }
+    for (let i = idx + 1; i < cur.length; i++) if (this.isManual(cur[i])) { hi = cur[i][1] - 0.05; break; }
+    const t = Math.round(Math.min(Math.max(audio, lo), Math.max(lo, hi)) * 1000) / 1000;
+    this.markManual(nt);
+    const list = cur
+      .filter((p, i) => i === idx || this.isManual(p) || (p[0] < nt ? p[1] < t : p[1] > t))
+      .map((p) => (p[0] === nt ? [nt, t] as [number, number] : p));
     this.anchors.set(list);
+    return list.findIndex((p) => p[0] === nt);
   }
 
   private onKey = (ev: KeyboardEvent) => {
@@ -370,18 +448,35 @@ export class TimingEditorPage implements OnInit, OnDestroy {
       this.togglePlay();
       return;
     }
+    if (ev.key === '[' || ev.key === ']') {
+      ev.preventDefault();
+      this.stepSelection(ev.key === ']' ? 1 : -1);
+      return;
+    }
     const idx = this.selected();
     if (idx == null) return;
     if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
       ev.preventDefault();
+      if (this.locked()) return;
       // Coalesce a run of nudges on one anchor into a single undo step.
       const now = performance.now();
       if (this.lastNudge.idx !== idx || now - this.lastNudge.at > 800) this.pushUndo();
       this.lastNudge = { idx, at: now };
       const step = (ev.shiftKey ? 0.1 : 0.02) * (ev.key === 'ArrowLeft' ? -1 : 1);
-      this.moveAnchor(idx, this.anchors()[idx][1] + step);
+      this.selected.set(this.moveAnchor(idx, this.anchors()[idx][1] + step));
+      this.queueSave();
+    } else if (ev.key.toLowerCase() === 'a' && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+      // Slam the selected anchor onto the playhead: listen, pause (or not) at the
+      // note's true attack, press A — no dragging across half the song.
+      ev.preventDefault();
+      if (this.locked()) return;
+      this.pushUndo();
+      const ni = this.moveAnchor(idx, this.position());
+      this.selected.set(ni);
+      this.scrollWaveTo(this.anchors()[ni][1]);
       this.queueSave();
     } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
+      if (this.locked()) return;
       const a = this.anchors()[idx];
       if (!this.isManual(a)) { this.status.set('engine anchor'); return; }
       this.pushUndo();
@@ -393,6 +488,26 @@ export class TimingEditorPage implements OnInit, OnDestroy {
       this.queueSave();
     }
   };
+
+  /** Select the previous/next anchor ([ / ]) and bring it into view in both panes;
+   *  with nothing selected, start from the anchor nearest the playhead. */
+  private stepSelection(dir: 1 | -1) {
+    const list = this.anchors();
+    if (!list.length) return;
+    const cur = this.selected();
+    let idx: number;
+    if (cur == null) {
+      const t = this.position();
+      idx = 0;
+      for (let i = 1; i < list.length; i++) {
+        if (Math.abs(list[i][1] - t) < Math.abs(list[idx][1] - t)) idx = i;
+      }
+    } else {
+      idx = Math.min(list.length - 1, Math.max(0, cur + dir));
+    }
+    this.select(idx);
+    this.scrollWaveTo(list[idx][1]);
+  }
 
   private queueSave() {
     this.status.set('…');

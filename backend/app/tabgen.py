@@ -83,6 +83,7 @@ def sync_timing(tab_id: int) -> None:
     """
     try:
         import json
+        import time
 
         tab = db.get_tab(tab_id)
         if not tab or not tab.get("stem_id"):
@@ -100,13 +101,21 @@ def sync_timing(tab_id: int) -> None:
             ]
             if not siblings:
                 return
-            timings = compute_timings_competitive(stem["path"], [t["alphatex"] for t in siblings])
-            for t, timing in zip(siblings, timings):
-                # Hand-placed anchors from the timing editor are ear-grade truth:
-                # they survive every re-sync and beat nearby engine anchors.
-                old = json.loads(t["timing"]) if t.get("timing") else {}
-                if old.get("manual"):
-                    timing = apply_manual(timing, old["manual"], t["alphatex"])
+            # Hand-placed anchors from the timing editor are ear-grade truth: they
+            # GUIDE the re-alignment (banding the DTW around the hand-fixed trend),
+            # survive every re-sync, and beat nearby engine anchors.
+            manual_lists = [
+                (json.loads(t["timing"]).get("manual") if t.get("timing") else None) or []
+                for t in siblings
+            ]
+            timings = compute_timings_competitive(
+                stem["path"], [t["alphatex"] for t in siblings], manual_lists
+            )
+            for t, timing, manual in zip(siblings, timings, manual_lists):
+                if manual:
+                    timing = apply_manual(timing, manual, t["alphatex"])
+                # The editor polls this stamp to know a requested re-sync landed.
+                timing["synced_at"] = round(time.time(), 3)
                 db.set_tab_timing(t["id"], json.dumps(timing))
     except Exception:  # noqa: BLE001
         traceback.print_exc()

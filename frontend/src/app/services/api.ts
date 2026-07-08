@@ -75,6 +75,7 @@ export interface TabTiming {
   bar_times: number[];           // audio start time (s) per bar, in render order
   notated_bars?: number[];       // notated start time (s) per bar (tab-tempo ruler)
   manual?: [number, number][];   // hand-placed anchors (timing editor); survive re-syncs
+  synced_at?: number;            // unix stamp of the last engine sync (editor polls this)
   missing: { bar: number; midi: number[]; t: number; amp: number }[];  // audio cross-check hints
 }
 export interface Tab {
@@ -182,6 +183,10 @@ export class Api {
   }
   updateTabTiming(tabId: number, manual: [number, number][]) {
     return this.http.patch<Tab>(`${this.base}/tabs/${tabId}/timing`, { manual });
+  }
+  /** Re-run the automatic timing sync in the background (manual anchors guide it). */
+  syncTab(tabId: number) {
+    return this.http.post<{ ok: boolean }>(`${this.base}/tabs/${tabId}/sync`, {});
   }
   deleteTab(tabId: number) {
     return this.http.delete<{ ok: boolean }>(`${this.base}/tabs/${tabId}`);
