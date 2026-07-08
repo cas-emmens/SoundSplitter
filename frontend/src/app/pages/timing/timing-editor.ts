@@ -34,6 +34,8 @@ interface BeatSpot {
           <input type="range" min="40" max="400" step="10" [ngModel]="pps()" (ngModelChange)="setZoom($event)">
         </label>
         <label class="dim"><input type="checkbox" [(ngModel)]="follow"> follow</label>
+        <label class="dim" title="Hide engine anchors on the waveform — your hand-placed ones only">
+          <input type="checkbox" [ngModel]="manualOnly()" (ngModelChange)="setManualOnly($event)"> manual only</label>
         <button (click)="undo()" [disabled]="!undoCount()" title="Undo last anchor edit (Ctrl+Z)">↩ Undo</button>
         <button (click)="resync()" [disabled]="syncing()"
                 title="Re-run the automatic sync — your manual anchors guide the whole alignment">
@@ -58,10 +60,10 @@ interface BeatSpot {
       <div class="wave" #waveScroll (scroll)="drawWave()">
         <div class="spacer" [style.width.px]="totalPx()" (pointerdown)="onWaveDown($event)">
           <canvas #waveCanvas></canvas>
-          @for (a of anchors(); track $index) {
-            <div class="anchor" [class.manual]="isManual(a)" [class.selected]="$index === selected()"
-                 [style.left.px]="a[1] * pps()"
-                 (pointerdown)="grabAnchor($event, $index)">
+          @for (x of visibleAnchors(); track x.i) {
+            <div class="anchor" [class.manual]="isManual(x.a)" [class.selected]="x.i === selected()"
+                 [style.left.px]="x.a[1] * pps()"
+                 (pointerdown)="grabAnchor($event, x.i)">
               <div class="head"></div>
             </div>
           }
@@ -125,6 +127,19 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   timeLabel = signal('0:00.0');
   syncing = signal(false);
   manualCount = computed(() => this.anchors().filter((a) => this.manualKeys().has(a[0].toFixed(4))).length);
+  manualOnly = signal(localStorage.getItem('timing.manualOnly') === '1');
+  /** The anchors drawn on the waveform, each carrying its index in the FULL list —
+   *  the filter is display-only, the warp/save always use every anchor. */
+  visibleAnchors = computed(() => this.anchors()
+    .map((a, i) => ({ a, i }))
+    .filter((x) => !this.manualOnly() || this.manualKeys().has(x.a[0].toFixed(4))));
+
+  setManualOnly(v: boolean) {
+    this.manualOnly.set(v);
+    localStorage.setItem('timing.manualOnly', v ? '1' : '0');
+    const idx = this.selected();
+    if (v && idx != null && !this.isManual(this.anchors()[idx])) this.select(null);
+  }
 
   private atHost = viewChild.required<ElementRef<HTMLDivElement>>('atHost');
   private atWrap = viewChild.required<ElementRef<HTMLDivElement>>('atWrap');
@@ -364,10 +379,13 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   private nearestAnchorByNotated(notated: number, tol: number): number | null {
     let best: number | null = null;
     let bestD = tol;
-    this.anchors().forEach(([n], i) => {
-      const d = Math.abs(n - notated);
+    // Only visible anchors count: with the manual-only filter on, clicking a note
+    // that has just an engine anchor creates a manual one there instead (a handy
+    // promote-to-manual gesture — the engine twin is evicted on save).
+    for (const { a, i } of this.visibleAnchors()) {
+      const d = Math.abs(a[0] - notated);
       if (d <= bestD) { bestD = d; best = i; }
-    });
+    }
     return best;
   }
 
@@ -494,24 +512,24 @@ export class TimingEditorPage implements OnInit, OnDestroy {
     }
   };
 
-  /** Select the previous/next anchor ([ / ]) and bring it into view in both panes;
-   *  with nothing selected, start from the anchor nearest the playhead. */
+  /** Select the previous/next VISIBLE anchor ([ / ]) and bring it into view in both
+   *  panes; with nothing selected, start from the anchor nearest the playhead. */
   private stepSelection(dir: 1 | -1) {
-    const list = this.anchors();
-    if (!list.length) return;
-    const cur = this.selected();
-    let idx: number;
-    if (cur == null) {
+    const vis = this.visibleAnchors();
+    if (!vis.length) return;
+    const pos = vis.findIndex((x) => x.i === this.selected());
+    let k: number;
+    if (pos < 0) {
       const t = this.position();
-      idx = 0;
-      for (let i = 1; i < list.length; i++) {
-        if (Math.abs(list[i][1] - t) < Math.abs(list[idx][1] - t)) idx = i;
+      k = 0;
+      for (let j = 1; j < vis.length; j++) {
+        if (Math.abs(vis[j].a[1] - t) < Math.abs(vis[k].a[1] - t)) k = j;
       }
     } else {
-      idx = Math.min(list.length - 1, Math.max(0, cur + dir));
+      k = Math.min(vis.length - 1, Math.max(0, pos + dir));
     }
-    this.select(idx);
-    this.scrollWaveTo(list[idx][1]);
+    this.select(vis[k].i);
+    this.scrollWaveTo(vis[k].a[1]);
   }
 
   private queueSave() {
