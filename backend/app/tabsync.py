@@ -522,6 +522,87 @@ def distinct_beat_ids(note_beats: list[Beat], window: float = 2.5) -> set[int]:
     return {id(b) for b in note_beats if id(b) not in ambiguous}
 
 
+def _detect_pitch_shift(groups: list[NoteGroup], note_beats: list[Beat],
+                        span: int = 3, window: float = 45.0) -> int:
+    """Semitones the RECORDING sounds above the tab's notation (usually 0).
+
+    A tab is sometimes notated in a different tuning frame than the record sounds
+    (The Chain: two parts written in double-drop-D shapes while the recording sounds
+    a whole step up — every pitch match failed and the alignment ran on noise, while
+    the stem's "missing" low D thumb-strikes sat at E2 all along). Vote exact-cost
+    matches of distinctive beats against nearby audio groups per candidate shift.
+    A non-zero shift must beat the notated frame DECISIVELY (1.5x the votes plus
+    real absolute evidence): correctly-notated tabs collect plenty of coincidental
+    scale-mate matches at other shifts and must never move. Per PART, not per song —
+    The Chain's third part is notated at concert pitch and stays at 0.
+    """
+    import bisect
+
+    distinct = distinct_beat_ids(note_beats)
+    times = [g.time for g in groups]
+    votes = {s: 0 for s in range(-span, span + 1)}
+    for b in note_beats:
+        if id(b) not in distinct or not b.pitches:
+            continue
+        lo = bisect.bisect_left(times, b.notated_time - window)
+        hi = bisect.bisect_right(times, b.notated_time + window)
+        for g in groups[lo:hi]:
+            # Only shifts with at least one pitch coincidence can reach cost 0.
+            deltas = {gp - bp for gp in g.pitches for bp in b.pitches}
+            for s in deltas:
+                if -span <= s <= span and _cost(
+                    g.pitches, [p + s for p in b.pitches], [p + s for p in b.alts]
+                ) == 0.0:
+                    votes[s] += 1
+    best = max(votes, key=lambda s: (votes[s], -abs(s)))
+    if best and votes[best] >= max(30, int(1.5 * votes[0])):
+        return best
+    return 0
+
+
+def _absent_pitches(groups: list[NoteGroup], note_beats: list[Beat]) -> set[int]:
+    """Tab pitches the stem's transcription essentially never heard.
+
+    Demucs separation loses notes: a thumbed low string shared with the kick, inner
+    chord voices buried in a full mix. A pitch the tab uses again and again that is
+    (near-)absent from the whole stem cannot anchor anything — worse, it makes twin
+    beats look distinct (``{D2, D4}`` vs ``{D4}`` sound identical when D2 is gone),
+    sneaking wrong-repetition matches past the ambiguity gate. Requires real tab
+    usage (>= 6 beats) and near-zero audio evidence, so ordinary sparse pitches
+    are untouched.
+    """
+    from collections import Counter
+
+    audio = Counter(p for g in groups for p in g.pitches)
+    tab = Counter(p for b in note_beats for p in b.pitches)
+    return {p for p, c in tab.items() if c >= 6 and audio.get(p, 0) <= max(1, 0.05 * c)}
+
+
+def _sounding_beats(tex: str, shift: int, groups: list[NoteGroup]) -> tuple[list[Beat], list[Beat]]:
+    """Parse a part into the frame the RECORDING sounds in.
+
+    Applies the detected semitone shift to every beat's pitches/bend targets, then
+    drops pitches the stem never heard (see :func:`_absent_pitches`) — beats left
+    empty become unmatchable and ride the interpolated warp, exactly like strum
+    repeats. Returns ``(all beats, matchable beats)`` — the same objects, so bend
+    probes and missing-note hints see the sounding frame too.
+    """
+    beats = parse_beats(tex)
+    if shift:
+        for b in beats:
+            b.pitches = [p + shift for p in b.pitches]
+            b.alts = [p + shift for p in b.alts]
+    nb = matchable_beats(beats)
+    absent = _absent_pitches(groups, nb)
+    if absent:
+        print(f"[tabsync] pitches unheard in the stem (separation losses): {sorted(absent)}")
+        for b in nb:
+            b.pitches = [p for p in b.pitches if p not in absent]
+            b.alts = [p for p in b.alts if p not in absent]
+        nb = [b for b in nb if b.pitches]
+    return beats, nb
+
+
 def _bar_durations(alphatex: str):
     """Audio-time -> the tab's local bar duration, for drumgrid's expected-bar prior
     (identity time assumption: the tab's LOCAL tempo is accurate even when the song's
@@ -543,7 +624,8 @@ def _bar_durations(alphatex: str):
     return expected
 
 
-def _structure_prior(stem_path: str, alphatexts: list[str]) -> list[tuple[float, float]] | None:
+def _structure_prior(stem_path: str, alphatexts: list[str],
+                     shifts: list[int] | None = None) -> list[tuple[float, float]] | None:
     """Map notated bars onto the drum stem's measured bar grid (None without usable drums).
 
     The banded pitch DTW can absorb tempo nuance but not whole-bar structure differences
@@ -562,8 +644,12 @@ def _structure_prior(stem_path: str, alphatexts: list[str]) -> list[tuple[float,
     if not drums:
         return None
     # Profile source: the densest part (most bars with struck notes) speaks for the
-    # song's shared measure grid.
-    densest = max(alphatexts, key=lambda tex: sum(1 for b in parse_beats(tex) if b.pitches))
+    # song's shared measure grid. Its bar pitch profiles must live in the SOUNDING
+    # frame (see _detect_pitch_shift) or every profile comparison misses.
+    di = max(range(len(alphatexts)),
+             key=lambda i: sum(1 for b in parse_beats(alphatexts[i]) if b.pitches))
+    densest = alphatexts[di]
+    dshift = (shifts or [0] * len(alphatexts))[di]
     grid = drumgrid.compute_grid(drums, expected_bar=_bar_durations(densest))
     if len(grid.boundaries) < 8:
         return None
@@ -579,7 +665,7 @@ def _structure_prior(stem_path: str, alphatexts: list[str]) -> list[tuple[float,
     bar_start: dict[int, float] = {}
     for b in parse_beats(densest):
         bar_start.setdefault(b.bar, b.notated_time)
-        notated.setdefault(b.bar, set()).update(b.pitches)
+        notated.setdefault(b.bar, set()).update(p + dshift for p in b.pitches)
     tab_bars = [(bar_start[i], notated.get(i, set())) for i in sorted(bar_start)]
     if len(tab_bars) < 8:
         return None
@@ -1179,7 +1265,8 @@ def _merge_trusted(trusted, others) -> list[tuple[float, float]]:
     return out
 
 
-def _glide_refine(stem_path: str, picked: list[tuple[str, dict | None, str]]) -> None:
+def _glide_refine(stem_path: str, picked: list[tuple[str, dict | None, str]],
+                  prepared: list[tuple[list[Beat], list[Beat]]]) -> None:
     """Re-anchor each part around physically-verified bend glides.
 
     Pitch-identity anchors can land on the wrong repetition of a phrase — all their
@@ -1193,7 +1280,9 @@ def _glide_refine(stem_path: str, picked: list[tuple[str, dict | None, str]]) ->
     for i, (tex, chosen, side) in enumerate(picked):
         if chosen is None or not chosen["anchors"]:
             continue
-        beats = parse_beats(tex)
+        # Sounding-frame beats (see _sounding_beats): pYIN must probe the frequencies
+        # the record actually plays, not the tab's notation frame.
+        beats, prepared_nb = prepared[i]
         probes = _bend_probes(beats)
         if not probes:
             continue
@@ -1212,7 +1301,7 @@ def _glide_refine(stem_path: str, picked: list[tuple[str, dict | None, str]]) ->
             <= 0.8 + 0.15 * min(abs(nt - g[0]) for g in glides)
         ]
         merged = _merge_trusted(glides, survivors)
-        nb = matchable_beats(beats)
+        nb = prepared_nb
         own = _pin_identity(merged)
         pairs = _dtw_pairs_banded(chosen["groups"], nb, own, 1.5)
         refined, matched = _anchors_of(
@@ -1226,7 +1315,8 @@ def _glide_refine(stem_path: str, picked: list[tuple[str, dict | None, str]]) ->
         )
 
 
-def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
+def _cross_refine(picked: list[tuple[str, dict | None, str]],
+                  prepared: list[tuple[list[Beat], list[Beat]]]) -> None:
     """Realign weakly-anchored parts around the best-anchored part's warp.
 
     Every part follows the SAME recording on an IDENTICAL notated grid (same tempo
@@ -1245,7 +1335,7 @@ def _cross_refine(picked: list[tuple[str, dict | None, str]]) -> None:
     for i, (tex, chosen, side) in enumerate(picked):
         if i == ref_i or chosen is None:
             continue
-        nb = matchable_beats(parse_beats(tex))
+        nb = prepared[i][1]  # sounding-frame matchable beats
         if not nb:
             continue
         band = 3.0
@@ -1284,12 +1374,21 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str],
     """
     guides = _monotonic(sorted({(float(n), float(a))
                                 for ml in (manual_lists or []) for n, a in ml}))
-    prior, cov_lo, steady = _structure_prior(stem_path, alphatexts) or (None, 0.0, False)
+    # Every part is matched in the frame the recording SOUNDS in: detect a notation
+    # transposition per part, then drop pitches the stem never heard.
+    mono_groups = group_onsets(extract_note_events(stem_path))
+    shifts = [_detect_pitch_shift(mono_groups, matchable_beats(parse_beats(tex)))
+              for tex in alphatexts]
+    for i, s in enumerate(shifts):
+        if s:
+            print(f"[tabsync] part {i}: recording sounds {s:+d} semitones vs its notation"
+                  " - matching in the sounding frame")
+    prepared = [_sounding_beats(tex, s, mono_groups) for tex, s in zip(alphatexts, shifts)]
+    prior, cov_lo, steady = _structure_prior(stem_path, alphatexts, shifts) or (None, 0.0, False)
     align_prior = _merge_guides(prior, guides)
     variants = []
     counts: list[tuple[int, int]] = []
-    for tex in alphatexts:
-        nb = matchable_beats(parse_beats(tex))
+    for tex, (_beats, nb) in zip(alphatexts, prepared):
         bp = [b.pitches for b in nb]
         vl = _align_variant(stem_path, "left", bp, nb, align_prior)
         vr = _align_variant(stem_path, "right", bp, nb, align_prior)
@@ -1308,8 +1407,8 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str],
             chosen, side = mono, "mono"
         picked.append((tex, chosen, side))
 
-    _cross_refine(picked)
-    _glide_refine(stem_path, picked)
+    _cross_refine(picked, prepared)
+    _glide_refine(stem_path, picked, prepared)
 
     # Grid phase calibration from the densest part's anchors (see _calibrate_prior) —
     # one shared correction, so every part reconciles against the same calibrated grid.
@@ -1321,21 +1420,26 @@ def compute_timings_competitive(stem_path: str, alphatexts: list[str],
     fallback_prior = _merge_guides(prior, guides)
 
     out: list[dict] = []
-    for tex, chosen, side in picked:
+    for (tex, chosen, side), (beats, _nb), shift in zip(picked, prepared, shifts):
         if chosen is None:
-            out.append({"version": 1, "anchors": [], "bar_times": [], "missing": [], "side": side})
+            out.append({"version": 1, "anchors": [], "bar_times": [], "missing": [],
+                        "side": side, "pitch_shift": shift})
             continue
         anchors = _with_prior_fallback(chosen["anchors"], fallback_prior, cov_lo, steady)
-        focus_beats = parse_beats(tex)
         missing_groups = [g for ai, g in enumerate(chosen["groups"]) if ai not in chosen["matched"]]
         res = AlignResult([], [], anchors, missing_groups)
+        # `beats` are in the sounding frame; report the hints back in the TAB's frame.
+        missing = _candidate_missing(beats, res)
+        for c in missing:
+            c["midi"] = [p - shift for p in c["midi"]]
         out.append({
             "version": 1,
             "anchors": [[round(n, 4), round(a, 4)] for n, a in anchors],
             "bar_times": bar_times_from(tex, anchors),
             "notated_bars": notated_bar_starts(tex),
-            "missing": _candidate_missing(focus_beats, res),
+            "missing": missing,
             "side": side,
+            "pitch_shift": shift,
         })
     return out
 
