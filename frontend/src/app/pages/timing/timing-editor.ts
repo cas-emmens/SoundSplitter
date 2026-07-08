@@ -152,7 +152,11 @@ export class TimingEditorPage implements OnInit, OnDestroy {
   private undoStack: { anchors: [number, number][]; manual: string[] }[] = [];
   private lastNudge = { idx: -1, at: 0 };
 
-  get duration() { return this.buffer?.duration ?? 0; }
+  // Signal, not a bare getter over `buffer`: totalPx (the spacer width) is a computed —
+  // a non-reactive duration left it cached at 0, the spacer at width 0, and the sticky
+  // canvas with no room to stick, so the wave scrolled away and 'left the viewport'.
+  private dur = signal(0);
+  get duration() { return this.dur(); }
 
   ngOnInit() {
     const tabId = Number(this.route.snapshot.paramMap.get('tabId'));
@@ -167,6 +171,7 @@ export class TimingEditorPage implements OnInit, OnDestroy {
         const resp = await fetch(this.api.fileUrl(tab.track_id, stem.name));
         this.ctx = new AudioContext();
         this.buffer = await this.ctx.decodeAudioData(await resp.arrayBuffer());
+        this.dur.set(this.buffer.duration);
         this.drawWave();
       });
       if (tab.alphatex) this.renderTab(tab.alphatex);
